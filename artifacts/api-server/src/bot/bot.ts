@@ -764,7 +764,77 @@ async function handleStringSelect(i: StringSelectMenuInteraction) {
   }
 
   if (customId === "sel_farm_topic") {
-    await handleTicketCreate(i, "buy-farms", true);
+    const sel = new StringSelectMenuBuilder()
+      .setCustomId("sel_farm_schematic")
+      .setPlaceholder("Choose a schematic type")
+      .addOptions(
+        new StringSelectMenuOptionBuilder()
+          .setLabel("Server Schematic")
+          .setValue("server")
+          .setDescription("Use one of our pre-made server schematics"),
+        new StringSelectMenuOptionBuilder()
+          .setLabel("Custom Schematic")
+          .setValue("custom")
+          .setDescription("Bring your own custom schematic"),
+      );
+    await i.reply({
+      embeds: [
+        new EmbedBuilder()
+          .setColor(GOLD_COLOR)
+          .setTitle("Buy Farms — Schematic Type")
+          .setDescription("Will you be using a **server schematic** or providing a **custom schematic**?")
+          .setFooter(FOOTER),
+      ],
+      components: [new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(sel)],
+      flags: 64,
+    });
+    return;
+  }
+
+  if (customId === "sel_farm_schematic") {
+    const schematic = values[0]!;
+    if (schematic === "server") {
+      const modal = new ModalBuilder()
+        .setCustomId("mod_farm_server")
+        .setTitle("Buy Farms — Server Schematic");
+      modal.addComponents(
+        new ActionRowBuilder<TextInputBuilder>().addComponents(
+          new TextInputBuilder()
+            .setCustomId("due_date")
+            .setLabel("When is it due?")
+            .setStyle(TextInputStyle.Short)
+            .setPlaceholder("e.g. ASAP, 2 weeks, March 1st")
+            .setRequired(true),
+        ),
+      );
+      await i.showModal(modal);
+      return;
+    }
+    if (schematic === "custom") {
+      const modal = new ModalBuilder()
+        .setCustomId("mod_farm_custom")
+        .setTitle("Buy Farms — Custom Schematic");
+      modal.addComponents(
+        new ActionRowBuilder<TextInputBuilder>().addComponents(
+          new TextInputBuilder()
+            .setCustomId("budget")
+            .setLabel("How much are you willing to spend?")
+            .setStyle(TextInputStyle.Short)
+            .setPlaceholder("e.g. $500, negotiable, open to offers")
+            .setRequired(true),
+        ),
+        new ActionRowBuilder<TextInputBuilder>().addComponents(
+          new TextInputBuilder()
+            .setCustomId("due_date")
+            .setLabel("When is it due?")
+            .setStyle(TextInputStyle.Short)
+            .setPlaceholder("e.g. ASAP, 2 weeks, March 1st")
+            .setRequired(true),
+        ),
+      );
+      await i.showModal(modal);
+      return;
+    }
     return;
   }
 
@@ -810,6 +880,144 @@ async function handleChannelSelect(i: ChannelSelectMenuInteraction) {
 
 async function handleModal(i: ModalSubmitInteraction) {
   const { customId } = i;
+
+  if (customId === "mod_farm_server" || customId === "mod_farm_custom") {
+    const { user, guild } = i;
+    if (!guild) return;
+
+    const isCustom = customId === "mod_farm_custom";
+    const dueDate  = i.fields.getTextInputValue("due_date");
+    const budget   = isCustom ? i.fields.getTextInputValue("budget") : null;
+
+    const existingId = storage.hasOpenTicket(user.id, "buy-farms", guild.id);
+    if (existingId && guild.channels.cache.get(existingId)) {
+      await i.reply({
+        embeds: [new EmbedBuilder().setColor(WARNING_COLOR).setDescription(`You already have an open farm ticket: <#${existingId}>`).setFooter(FOOTER)],
+        flags: 64,
+      });
+      return;
+    }
+    if (existingId) storage.removeTicket(existingId);
+
+    await i.deferReply({ flags: 64 });
+
+    let discordCategory = guild.channels.cache.find(
+      (c) => c.type === ChannelType.GuildCategory && c.name === FARM_CATEGORY.discordCategoryName,
+    ) as CategoryChannel | undefined;
+    if (!discordCategory) {
+      discordCategory = await guild.channels.create({
+        name: FARM_CATEGORY.discordCategoryName,
+        type: ChannelType.GuildCategory,
+        permissionOverwrites: [{ id: guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] }],
+      });
+    }
+
+    const ticketNum = storage.nextTicketNumber();
+    const safeName  = user.username.toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 18) || "user";
+    const channelName = `farm-${safeName}`;
+
+    const ticketChannel = await guild.channels.create({
+      name: channelName,
+      type: ChannelType.GuildText,
+      parent: discordCategory.id,
+      topic: `Ticket ${ticketTag(ticketNum)} | Buy Farms | ${user.tag}`,
+      permissionOverwrites: [
+        { id: guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
+        {
+          id: user.id,
+          allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.AttachFiles, PermissionFlagsBits.EmbedLinks],
+        },
+        {
+          id: guild.members.me!.id,
+          allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ManageChannels, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.ManageMessages],
+        },
+        {
+          id: BUILD_TICKET_ROLE_ID,
+          allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.AttachFiles],
+        },
+      ],
+    });
+
+    const schematicType = isCustom ? "Custom Schematic" : "Server Schematic";
+    const welcomeFields: { name: string; value: string; inline: boolean }[] = [
+      { name: "Opened by",       value: `<@${user.id}>`,                     inline: true },
+      { name: "Ticket",          value: ticketTag(ticketNum),                 inline: true },
+      { name: "Schematic Type",  value: schematicType,                        inline: true },
+      { name: "Due Date",        value: dueDate,                              inline: true },
+    ];
+    if (isCustom && budget) {
+      welcomeFields.push({ name: "Budget", value: budget, inline: true });
+    }
+
+    const customMsg = storage.getCategoryMessage("buy-farms") ?? FARM_CATEGORY.description;
+    const welcomeEmbed = new EmbedBuilder()
+      .setColor(SUCCESS_COLOR)
+      .setTitle(`Buy Farms — ${ticketTag(ticketNum)}`)
+      .setDescription(customMsg)
+      .addFields(...welcomeFields)
+      .setFooter(FOOTER)
+      .setTimestamp();
+
+    const controlRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder().setCustomId("ticket_close").setLabel("Close Ticket").setStyle(ButtonStyle.Danger),
+      new ButtonBuilder().setCustomId("ticket_claim").setLabel("Claim Ticket").setStyle(ButtonStyle.Secondary),
+    );
+
+    await ticketChannel.send({
+      content: `<@${user.id}> <@&${BUILD_TICKET_ROLE_ID}>`,
+      embeds: [welcomeEmbed],
+      components: [controlRow],
+    });
+
+    storage.addTicket(ticketChannel.id, {
+      userId: user.id,
+      username: user.username,
+      categoryId: "buy-farms",
+      guildId: guild.id,
+      channelId: ticketChannel.id,
+      createdAt: new Date().toISOString(),
+      ticketNumber: ticketNum,
+    });
+
+    const logCh = guild.channels.cache.get(TICKET_LOG_CHANNEL_ID) as TextChannel | undefined;
+    if (logCh) {
+      const joinEmbed = new EmbedBuilder()
+        .setColor(SUCCESS_COLOR)
+        .setTitle("Join Ticket")
+        .setDescription(`${channelName} with ID: ${ticketNum} has been opened. Press the button below to join it.`)
+        .addFields(
+          { name: "Opened By",       value: `<@${user.id}>`,  inline: true },
+          { name: "Panel",           value: "Buy Farms",       inline: true },
+          { name: "Schematic",       value: schematicType,     inline: true },
+          { name: "Due Date",        value: dueDate,           inline: true },
+          ...(isCustom && budget ? [{ name: "Budget", value: budget, inline: true }] : []),
+          { name: "Staff In Ticket", value: "0",              inline: true },
+        )
+        .setFooter(FOOTER)
+        .setTimestamp();
+      await logCh.send({
+        embeds: [joinEmbed],
+        components: [
+          new ActionRowBuilder<ButtonBuilder>().addComponents(
+            new ButtonBuilder().setCustomId(`join_ticket_${ticketChannel.id}`).setLabel("+ Join Ticket").setStyle(ButtonStyle.Primary),
+          ),
+        ],
+      }).catch(() => {});
+    }
+
+    await i.editReply({
+      embeds: [
+        new EmbedBuilder()
+          .setColor(SUCCESS_COLOR)
+          .setTitle("Farm Ticket Created")
+          .setDescription(`Your farm ticket has been created: <#${ticketChannel.id}>`)
+          .addFields({ name: "Ticket Number", value: ticketTag(ticketNum), inline: true })
+          .setFooter(FOOTER),
+      ],
+    });
+    return;
+  }
+
   if (customId === "mod_farm_desc") {
     storage.updateFarmDescription(i.fields.getTextInputValue("farm_desc"));
     await i.reply({ embeds: [okEmbed("Farm description updated.")], flags: 64 }); return;
