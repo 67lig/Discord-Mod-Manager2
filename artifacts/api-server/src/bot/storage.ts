@@ -25,6 +25,8 @@ interface BotData {
 }
 
 const DATA_FILE = path.resolve(process.cwd(), "bot-data.json");
+const TRANSCRIPT_DIR = path.resolve(process.cwd(), "bot-transcripts");
+if (!fs.existsSync(TRANSCRIPT_DIR)) fs.mkdirSync(TRANSCRIPT_DIR, { recursive: true });
 
 function defaultData(): BotData {
   return {
@@ -94,6 +96,18 @@ export const storage = {
 
   getTicket(channelId: string): TicketEntry | undefined {
     return _data.tickets[channelId];
+  },
+
+  saveTranscript(ticketNumber: number, content: string): string {
+    const file = path.join(TRANSCRIPT_DIR, `ticket-${String(ticketNumber).padStart(4, "0")}.txt`);
+    fs.writeFileSync(file, content, "utf8");
+    return file;
+  },
+
+  readTranscript(ticketNumber: number): Buffer | null {
+    const file = path.join(TRANSCRIPT_DIR, `ticket-${String(ticketNumber).padStart(4, "0")}.txt`);
+    if (!fs.existsSync(file)) return null;
+    return fs.readFileSync(file);
   },
 
   getTicketsByGuild(guildId: string): (TicketEntry & { channelId: string })[] {

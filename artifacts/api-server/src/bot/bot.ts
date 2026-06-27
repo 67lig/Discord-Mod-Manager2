@@ -223,9 +223,7 @@ async function closeTicket(
   }
   const transcript = lines.join("\n");
 
-  const file = new AttachmentBuilder(Buffer.from(transcript, "utf8"), {
-    name: `transcript-${ticketTag(ticket.ticketNumber)}.txt`,
-  });
+  storage.saveTranscript(ticket.ticketNumber, transcript);
 
   const transcriptCh = guild.channels.cache.get(TRANSCRIPT_CHANNEL_ID) as TextChannel | undefined;
   const logCh = guild.channels.cache.get(TICKET_LOG_CHANNEL_ID) as TextChannel | undefined;
@@ -236,24 +234,31 @@ async function closeTicket(
     .setColor(SUCCESS_COLOR)
     .setTitle("Ticket Closed")
     .addFields(
-      { name: "# Ticket ID",    value: `${ticket.ticketNumber}`,                              inline: true },
-      { name: "✅ Opened By",   value: `<@${ticket.userId}>`,                                 inline: true },
-      { name: "🔴 Closed By",  value: `<@${closedById}>`,                                    inline: true },
-      { name: "⏰ Open Time",   value: `<t:${openedTs}:F>`,                                   inline: true },
-      { name: "👤 Claimed By",  value: ticket.claimedById ? `<@${ticket.claimedById}>` : "Not claimed", inline: true },
-      { name: "❓ Reason",      value: reason },
+      { name: "# Ticket ID",     value: `${ticket.ticketNumber}`,                                        inline: true },
+      { name: "✅ Opened By",    value: `<@${ticket.userId}>`,                                           inline: true },
+      { name: "🔴 Closed By",   value: `<@${closedById}>`,                                              inline: true },
+      { name: "⏰ Open Time",    value: `<t:${openedTs}:F>`,                                             inline: true },
+      { name: "👤 Claimed By",   value: ticket.claimedById ? `<@${ticket.claimedById}>` : "Not claimed", inline: true },
+      { name: "❓ Reason",       value: reason },
     )
     .setFooter(FOOTER)
     .setTimestamp();
 
-  let transcriptMsgUrl = "";
+  const showTranscriptBtn = new ButtonBuilder()
+    .setCustomId(`show_transcript_${ticket.ticketNumber}`)
+    .setLabel("Show Transcript")
+    .setStyle(ButtonStyle.Secondary);
+
   if (transcriptCh) {
     const transcriptMsg = await transcriptCh
-      .send({ embeds: [closeEmbed], files: [file] })
+      .send({ embeds: [closeEmbed], components: [new ActionRowBuilder<ButtonBuilder>().addComponents(showTranscriptBtn)] })
       .catch(() => null);
     if (transcriptMsg) {
-      transcriptMsgUrl = `https://discord.com/channels/${guild.id}/${transcriptCh.id}/${transcriptMsg.id}`;
       const editRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+        new ButtonBuilder()
+          .setCustomId(`show_transcript_${ticket.ticketNumber}`)
+          .setLabel("Show Transcript")
+          .setStyle(ButtonStyle.Secondary),
         new ButtonBuilder()
           .setCustomId(`edit_reason_${guild.id}_${transcriptCh.id}_${transcriptMsg.id}`)
           .setLabel("Edit Reason")
@@ -263,31 +268,8 @@ async function closeTicket(
     }
   }
 
-  const logEmbed = new EmbedBuilder()
-    .setColor(SUCCESS_COLOR)
-    .setTitle("Ticket Closed")
-    .addFields(
-      { name: "# Ticket ID",   value: `${ticket.ticketNumber}`,                              inline: true },
-      { name: "✅ Opened By",  value: `<@${ticket.userId}>`,                                 inline: true },
-      { name: "🔴 Closed By", value: `<@${closedById}>`,                                    inline: true },
-      { name: "⏰ Open Time",  value: `<t:${openedTs}:F>`,                                   inline: true },
-      { name: "👤 Claimed By", value: ticket.claimedById ? `<@${ticket.claimedById}>` : "Not claimed", inline: true },
-      { name: "❓ Reason",     value: reason },
-    )
-    .setFooter(FOOTER)
-    .setTimestamp();
-
   if (logCh) {
-    const logButtons: ButtonBuilder[] = [];
-    if (transcriptMsgUrl) {
-      logButtons.push(
-        new ButtonBuilder().setLabel("View Transcript").setStyle(ButtonStyle.Link).setURL(transcriptMsgUrl),
-      );
-    }
-    const logRow = new ActionRowBuilder<ButtonBuilder>().addComponents(...logButtons);
-    await logCh
-      .send({ embeds: [logEmbed], ...(logButtons.length > 0 ? { components: [logRow] } : {}) })
-      .catch(() => {});
+    await logCh.send({ embeds: [closeEmbed] }).catch(() => {});
   }
 }
 
@@ -392,6 +374,18 @@ async function handleButton(i: ButtonInteraction) {
       storage.removeTicket(i.channel!.id);
       await (i.channel as TextChannel).delete("Ticket closed").catch(() => {});
     }, 5000);
+    return;
+  }
+
+  if (customId.startsWith("show_transcript_")) {
+    const ticketNumber = parseInt(customId.slice("show_transcript_".length), 10);
+    const buf = storage.readTranscript(ticketNumber);
+    if (!buf) {
+      await i.reply({ embeds: [errEmbed("Transcript file not found.")], flags: 64 });
+      return;
+    }
+    const file = new AttachmentBuilder(buf, { name: `transcript-${String(ticketNumber).padStart(4, "0")}.txt` });
+    await i.reply({ files: [file], flags: 64 });
     return;
   }
 
