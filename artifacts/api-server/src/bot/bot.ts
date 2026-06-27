@@ -365,8 +365,8 @@ async function handleCommand(i: ChatInputCommandInteraction) {
     const shards       = fmtNum(parseNum(result.shards));
     const kills        = fmtNum(parseNum(result.kills));
     const deaths       = fmtNum(parseNum(result.deaths));
-    const playtimeTicks = parseNum(result.playtime);
-    const playtime     = fmtPlaytime(Math.floor(playtimeTicks / 20));
+    const playtimeMs   = parseNum(result.playtime);
+    const playtime     = fmtPlaytime(Math.floor(playtimeMs / 1000));
     const blocksPlaced = fmtNum(parseNum(result.placed_blocks));
     const blocksBroken = fmtNum(parseNum(result.broken_blocks));
     const mobsKilled   = fmtNum(parseNum(result.mobs_killed));
@@ -554,17 +554,87 @@ async function handleButton(i: ButtonInteraction) {
     return;
   }
 
+  if (customId.startsWith("farm_accept_")) {
+    const ticketChannelId = customId.slice("farm_accept_".length);
+    if (!guild) return;
+    if (!isOwner(user.id)) {
+      await i.reply({ embeds: [errEmbed("Only the owner can accept farm requests.")], flags: 64 });
+      return;
+    }
+    const disabledRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder().setCustomId("ticket_close").setLabel("Close Ticket").setStyle(ButtonStyle.Danger),
+      new ButtonBuilder().setCustomId(customId).setLabel(`Accepted by ${user.username}`).setStyle(ButtonStyle.Success).setDisabled(true),
+    );
+    await i.update({ components: [disabledRow] });
+    const ticketCh = guild.channels.cache.get(ticketChannelId) as TextChannel | undefined;
+    if (ticketCh) {
+      await ticketCh.send({
+        embeds: [
+          new EmbedBuilder()
+            .setColor(SUCCESS_COLOR)
+            .setDescription(`✅ **<@${user.id}> has accepted this farm request.**\nBuilders can now claim this ticket.`)
+            .setFooter(FOOTER)
+            .setTimestamp(),
+        ],
+        components: [
+          new ActionRowBuilder<ButtonBuilder>().addComponents(
+            new ButtonBuilder().setCustomId("ticket_claim").setLabel("Claim Ticket").setStyle(ButtonStyle.Primary),
+            new ButtonBuilder().setCustomId("ticket_close").setLabel("Close Ticket").setStyle(ButtonStyle.Danger),
+          ),
+        ],
+      }).catch(() => {});
+    }
+    return;
+  }
+
+  if (customId === "farm_change_price") {
+    if (!guild || !i.channel) return;
+    const ticket = storage.getTicket(i.channel.id);
+    if (!ticket || ticket.categoryId !== "buy-farms") return;
+    if (ticket.claimedById !== user.id) {
+      await i.reply({ embeds: [errEmbed("Only the builder who claimed this ticket can update the price.")], flags: 64 });
+      return;
+    }
+    const modal = new ModalBuilder().setCustomId("mod_farm_price").setTitle("Update Farm Price");
+    modal.addComponents(
+      new ActionRowBuilder<TextInputBuilder>().addComponents(
+        new TextInputBuilder()
+          .setCustomId("new_price")
+          .setLabel("New Price")
+          .setStyle(TextInputStyle.Short)
+          .setPlaceholder("e.g. 500M, $250, negotiable")
+          .setRequired(true),
+      ),
+    );
+    await i.showModal(modal);
+    return;
+  }
+
   if (customId === "ticket_claim") {
     if (!guild || !i.channel) return;
     const ticket = storage.getTicket(i.channel.id);
     if (!ticket) { await i.reply({ embeds: [errEmbed("Not a ticket channel.")], flags: 64 }); return; }
     const member = i.member as GuildMember;
-    if (!isStaff(member)) { await i.reply({ embeds: [errEmbed("Staff only.")], flags: 64 }); return; }
+    const isFarmBuilder = ticket.categoryId === "buy-farms" && member.roles.cache.has(BUILD_TICKET_ROLE_ID);
+    if (!isStaff(member) && !isFarmBuilder) {
+      await i.reply({ embeds: [errEmbed("You don't have permission to claim this ticket.")], flags: 64 }); return;
+    }
     if (ticket.claimedById) {
       await i.reply({ embeds: [errEmbed(`This ticket is already claimed by <@${ticket.claimedById}>.`)], flags: 64 }); return;
     }
     storage.claimTicket(i.channel.id, user.username, user.id);
-    await i.reply({ embeds: [okEmbed(`Ticket claimed by <@${user.id}>.`)] });
+    if (ticket.categoryId === "buy-farms") {
+      await i.reply({
+        embeds: [okEmbed(`Ticket claimed by <@${user.id}>.`)],
+        components: [
+          new ActionRowBuilder<ButtonBuilder>().addComponents(
+            new ButtonBuilder().setCustomId("farm_change_price").setLabel("Change Price").setStyle(ButtonStyle.Secondary),
+          ),
+        ],
+      });
+    } else {
+      await i.reply({ embeds: [okEmbed(`Ticket claimed by <@${user.id}>.`)] });
+    }
     return;
   }
 
@@ -960,7 +1030,7 @@ async function handleModal(i: ModalSubmitInteraction) {
 
     const controlRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
       new ButtonBuilder().setCustomId("ticket_close").setLabel("Close Ticket").setStyle(ButtonStyle.Danger),
-      new ButtonBuilder().setCustomId("ticket_claim").setLabel("Claim Ticket").setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId(`farm_accept_${ticketChannel.id}`).setLabel("Accept Request").setStyle(ButtonStyle.Success),
     );
 
     await ticketChannel.send({
@@ -1013,6 +1083,20 @@ async function handleModal(i: ModalSubmitInteraction) {
           .setDescription(`Your farm ticket has been created: <#${ticketChannel.id}>`)
           .addFields({ name: "Ticket Number", value: ticketTag(ticketNum), inline: true })
           .setFooter(FOOTER),
+      ],
+    });
+    return;
+  }
+
+  if (customId === "mod_farm_price") {
+    const newPrice = i.fields.getTextInputValue("new_price");
+    await i.reply({
+      embeds: [
+        new EmbedBuilder()
+          .setColor(GOLD_COLOR)
+          .setDescription(`<@${user.id}> updated the farm price to: **${newPrice}**`)
+          .setFooter(FOOTER)
+          .setTimestamp(),
       ],
     });
     return;
