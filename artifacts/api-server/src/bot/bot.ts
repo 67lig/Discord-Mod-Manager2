@@ -61,10 +61,10 @@ export function createBotClient(): Client {
     intents: [
       GatewayIntentBits.Guilds,
       GatewayIntentBits.GuildMembers,
+      GatewayIntentBits.GuildPresences,
       GatewayIntentBits.GuildMessages,
       GatewayIntentBits.MessageContent,
       GatewayIntentBits.GuildModeration,
-      GatewayIntentBits.GuildPresences,
     ],
     partials: [Partials.Channel, Partials.Message],
   });
