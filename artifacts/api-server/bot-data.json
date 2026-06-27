@@ -1,6 +1,16 @@
 {
-  "tickets": {},
-  "ticketCounter": 5,
+  "tickets": {
+    "1520246921468444673": {
+      "userId": "1395167500836147230",
+      "username": "imtxy",
+      "categoryId": "skellys",
+      "guildId": "1450662191890956322",
+      "channelId": "1520246921468444673",
+      "createdAt": "2026-06-27T01:58:31.303Z",
+      "ticketNumber": 6
+    }
+  },
+  "ticketCounter": 6,
   "farmDescription": "Buy Farms – For users interested in purchasing a farm. Use this ticket for farm availability, pricing, purchase inquiries, or any questions related to buying a farm.",
   "farmList": "available farms:\n\n(No farms currently listed. Check back soon!)",
   "categoryMessages": {},

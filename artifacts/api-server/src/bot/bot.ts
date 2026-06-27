@@ -1233,7 +1233,6 @@ async function handleTicketCreate(
 
   const controlRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
     new ButtonBuilder().setCustomId("ticket_close").setLabel("Close Ticket").setStyle(ButtonStyle.Danger),
-    new ButtonBuilder().setCustomId("ticket_claim").setLabel("Claim Ticket").setStyle(ButtonStyle.Secondary),
   );
 
   const ping = isFarm ? `<@${user.id}> <@&${BUILD_TICKET_ROLE_ID}>` : `<@${user.id}>`;
