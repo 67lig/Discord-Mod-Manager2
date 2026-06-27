@@ -48,6 +48,7 @@ import {
   TICKET_LOG_CHANNEL_ID,
   TRANSCRIPT_CHANNEL_ID,
   MOD_ROLE_IDS,
+  STAFF_ROLE_IDS,
 } from "./config.js";
 import { storage } from "./storage.js";
 
@@ -210,7 +211,10 @@ async function handleInteraction(i: Interaction) {
 
 function isOwner(id: string) { return id === OWNER_ID; }
 function isStaff(m: GuildMember) {
-  return isOwner(m.id) || m.permissions.has(PermissionFlagsBits.ManageChannels) || m.permissions.has(PermissionFlagsBits.Administrator);
+  return isOwner(m.id)
+    || m.permissions.has(PermissionFlagsBits.ManageChannels)
+    || m.permissions.has(PermissionFlagsBits.Administrator)
+    || STAFF_ROLE_IDS.some((id) => m.roles.cache.has(id));
 }
 function isMod(m: GuildMember) {
   return isOwner(m.id) || MOD_ROLE_IDS.some((id) => m.roles.cache.has(id));

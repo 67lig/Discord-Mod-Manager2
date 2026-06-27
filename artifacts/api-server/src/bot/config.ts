@@ -10,6 +10,10 @@ export const MOD_ROLE_IDS = [
   "1450662192365047825",
 ];
 
+export const STAFF_ROLE_IDS = [
+  "1520248946637930516",
+];
+
 export const BOT_COLOR = 0x5865f2;
 export const SUCCESS_COLOR = 0x57f287;
 export const ERROR_COLOR = 0xed4245;
