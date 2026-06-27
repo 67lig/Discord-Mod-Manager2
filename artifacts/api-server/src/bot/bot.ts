@@ -74,7 +74,7 @@ function fmtPlaytime(seconds: number): string {
   return `${d}d ${h}h ${m}m`;
 }
 
-const FOOTER = { text: "Powered by tickets.bot" };
+const FOOTER = { text: "V3 Bot" };
 
 function ticketTag(n: number) {
   return `#${String(n).padStart(4, "0")}`;
@@ -306,59 +306,96 @@ async function handleCommand(i: ChatInputCommandInteraction) {
     const username = i.options.getString("username", true).trim();
     await i.deferReply();
 
-    let data: Record<string, unknown>;
+    type StatsResult = {
+      money?: string | number;
+      shards?: string | number;
+      kills?: string | number;
+      deaths?: string | number;
+      playtime?: string | number;
+      placed_blocks?: string | number;
+      broken_blocks?: string | number;
+      mobs_killed?: string | number;
+      money_spent_on_shop?: string | number;
+      money_made_from_sell?: string | number;
+    };
+
+    let result: StatsResult;
+    let online = false;
+
     try {
-      const res = await fetch(`https://api.donutsmp.net/v1/stats/${encodeURIComponent(username)}`, {
-        headers: { Authorization: `Bearer ${DONUTSMP_API_KEY}` },
-      });
-      if (!res.ok) {
-        const errText = await res.text().catch(() => String(res.status));
-        await i.editReply({ embeds: [errEmbed(`Player **${username}** not found or API error: ${errText}`)] });
+      const [statsRes, lookupRes] = await Promise.all([
+        fetch(`https://api.donutsmp.net/v1/stats/${encodeURIComponent(username)}`, {
+          headers: { Authorization: `Bearer ${DONUTSMP_API_KEY}` },
+        }),
+        fetch(`https://api.donutsmp.net/v1/lookup/${encodeURIComponent(username)}`, {
+          headers: { Authorization: `Bearer ${DONUTSMP_API_KEY}` },
+        }),
+      ]);
+
+      if (!statsRes.ok) {
+        await i.editReply({ embeds: [errEmbed(`**${username}** doesn't exist on DonutSMP.`)] });
         return;
       }
-      const json = (await res.json()) as { data?: Record<string, unknown> };
-      data = json.data ?? (json as Record<string, unknown>);
-    } catch (e) {
+
+      const statsJson = (await statsRes.json()) as { status: number; result?: StatsResult };
+      if (!statsJson.result) {
+        await i.editReply({ embeds: [errEmbed(`**${username}** doesn't exist on DonutSMP.`)] });
+        return;
+      }
+      result = statsJson.result;
+
+      if (lookupRes.ok) {
+        const lookupJson = (await lookupRes.json()) as { status?: number };
+        online = lookupJson.status === 200;
+      }
+    } catch {
       await i.editReply({ embeds: [errEmbed("Failed to reach the DonutSMP API. Try again later.")] });
       return;
     }
 
-    const online = Boolean(data["online"] ?? data["isOnline"]);
     const embedColor = online ? ONLINE_COLOR : OFFLINE_COLOR;
-    const statusLabel = online ? "currently online" : "currently offline";
+    const statusLabel = online ? "Online" : "Offline";
 
-    const balance      = typeof data["balance"]      === "number" ? fmtNum(data["balance"])      : String(data["balance"]      ?? "N/A");
-    const shards       = typeof data["shards"]       === "number" ? fmtNum(data["shards"])       : String(data["shards"]       ?? "N/A");
-    const kills        = typeof data["kills"]        === "number" ? fmtNum(data["kills"])        : String(data["kills"]        ?? "N/A");
-    const deaths       = typeof data["deaths"]       === "number" ? fmtNum(data["deaths"])       : String(data["deaths"]       ?? "N/A");
-    const playtime     = typeof data["playtime"]     === "number" ? fmtPlaytime(data["playtime"]) : String(data["playtime"]    ?? "N/A");
-    const blocksPlaced = typeof data["blocksPlaced"] === "number" ? fmtNum(data["blocksPlaced"]) : String(data["blocksPlaced"] ?? "N/A");
-    const blocksBroken = typeof data["blocksBroken"] === "number" ? fmtNum(data["blocksBroken"]) : String(data["blocksBroken"] ?? "N/A");
-    const mobsKilled   = typeof data["mobsKilled"]   === "number" ? fmtNum(data["mobsKilled"])   : String(data["mobsKilled"]   ?? "N/A");
-    const moneyShop    = typeof data["moneySpentShop"] === "number" ? fmtNum(data["moneySpentShop"]) : String(data["moneySpentShop"] ?? "N/A");
-    const moneySell    = typeof data["moneyMadeSell"]  === "number" ? fmtNum(data["moneyMadeSell"])  : String(data["moneyMadeSell"]  ?? "N/A");
-    const lastSeen     = String(data["lastSeen"] ?? "N/A");
-    const discord      = String(data["discord"]  ?? "Not Linked");
+    function parseNum(v: string | number | undefined): number {
+      if (v === undefined || v === null) return 0;
+      return typeof v === "number" ? v : parseFloat(v);
+    }
+
+    const money        = fmtNum(parseNum(result.money));
+    const shards       = fmtNum(parseNum(result.shards));
+    const kills        = fmtNum(parseNum(result.kills));
+    const deaths       = fmtNum(parseNum(result.deaths));
+    const playtimeTicks = parseNum(result.playtime);
+    const playtime     = fmtPlaytime(Math.floor(playtimeTicks / 20));
+    const blocksPlaced = fmtNum(parseNum(result.placed_blocks));
+    const blocksBroken = fmtNum(parseNum(result.broken_blocks));
+    const mobsKilled   = fmtNum(parseNum(result.mobs_killed));
+    const moneyShop    = fmtNum(parseNum(result.money_spent_on_shop));
+    const moneySell    = fmtNum(parseNum(result.money_made_from_sell));
+
+    const kdr = parseNum(result.deaths) > 0
+      ? (parseNum(result.kills) / parseNum(result.deaths)).toFixed(2)
+      : parseNum(result.kills).toFixed(2);
 
     const embed = new EmbedBuilder()
       .setColor(embedColor)
       .setTitle(`${username}'s Statistics`)
       .setThumbnail(`https://minotar.net/avatar/${encodeURIComponent(username)}/80`)
       .addFields(
-        { name: "Balance",            value: balance,      inline: false },
-        { name: "Shards",             value: shards,       inline: false },
-        { name: "Kills",              value: kills,        inline: false },
-        { name: "Deaths",             value: deaths,       inline: false },
-        { name: "Playtime",           value: playtime,     inline: false },
-        { name: "Blocks Placed",      value: blocksPlaced, inline: false },
-        { name: "Blocks Broken",      value: blocksBroken, inline: false },
-        { name: "Mobs Killed",        value: mobsKilled,   inline: false },
-        { name: "Money Spent (Shop)", value: moneyShop,    inline: false },
-        { name: "Money Made (Sell)",  value: moneySell,    inline: false },
-        { name: "Last Seen",          value: lastSeen,     inline: false },
-        { name: "Discord",            value: discord,      inline: false },
+        { name: "Balance",            value: `\`${money}\``,        inline: true },
+        { name: "Shards",             value: `\`${shards}\``,       inline: true },
+        { name: "Playtime",           value: `\`${playtime}\``,     inline: true },
+        { name: "Kills",              value: `\`${kills}\``,        inline: true },
+        { name: "Deaths",             value: `\`${deaths}\``,       inline: true },
+        { name: "K/D Ratio",          value: `\`${kdr}\``,          inline: true },
+        { name: "Blocks Placed",      value: `\`${blocksPlaced}\``, inline: true },
+        { name: "Blocks Broken",      value: `\`${blocksBroken}\``, inline: true },
+        { name: "Mobs Killed",        value: `\`${mobsKilled}\``,   inline: true },
+        { name: "Money Spent (Shop)", value: `\`${moneyShop}\``,    inline: true },
+        { name: "Money Made (Sell)",  value: `\`${moneySell}\``,    inline: true },
+        { name: "Status",             value: `\`${statusLabel}\``,  inline: true },
       )
-      .setFooter({ text: `${username} is ${statusLabel}!` })
+      .setFooter({ text: `DonutSMP Stats • ${username}` })
       .setTimestamp();
 
     await i.editReply({ embeds: [embed] });
