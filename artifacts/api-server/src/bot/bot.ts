@@ -191,53 +191,99 @@ async function logToChannel(guild: Guild, channelId: string, embed: EmbedBuilder
   if (ch) await ch.send({ embeds: [embed] }).catch(() => {});
 }
 
-async function sendTranscript(guild: Guild, ticket: Awaited<ReturnType<typeof storage.getTicket>>, channel: TextChannel, closedBy: string, reason: string) {
-  if (!ticket) return;
+async function closeTicket(
+  guild: Guild,
+  ticket: NonNullable<ReturnType<typeof storage.getTicket>>,
+  channel: TextChannel,
+  closedByTag: string,
+  closedById: string,
+  reason: string,
+) {
   const cat = ALL_CATEGORIES.find((c) => c.id === ticket.categoryId);
 
   const messages = await channel.messages.fetch({ limit: 100 }).catch(() => null);
   let transcript = `Ticket Transcript — ${ticketTag(ticket.ticketNumber)}\n`;
   transcript += `Category: ${cat?.label ?? ticket.categoryId}\n`;
   transcript += `Opened by: ${ticket.username} (${ticket.userId})\n`;
-  transcript += `Closed by: ${closedBy}\n`;
+  transcript += `Closed by: ${closedByTag}\n`;
   transcript += `Reason: ${reason}\n`;
   transcript += `Date: ${new Date().toUTCString()}\n`;
   transcript += `\n${"─".repeat(50)}\n\n`;
-
   if (messages) {
-    const sorted = [...messages.values()].reverse();
-    for (const msg of sorted) {
+    for (const msg of [...messages.values()].reverse()) {
       if (msg.author.bot) continue;
       const ts = new Date(msg.createdTimestamp).toUTCString();
       transcript += `[${ts}] ${msg.author.username}: ${msg.content}`;
-      if (msg.attachments.size > 0) {
-        transcript += ` [${msg.attachments.size} attachment(s)]`;
-      }
+      if (msg.attachments.size > 0) transcript += ` [${msg.attachments.size} attachment(s)]`;
       transcript += "\n";
     }
   }
 
-  const buffer = Buffer.from(transcript, "utf8");
-  const file = new AttachmentBuilder(buffer, { name: `transcript-${ticketTag(ticket.ticketNumber)}.txt` });
+  const file = new AttachmentBuilder(Buffer.from(transcript, "utf8"), {
+    name: `transcript-${ticketTag(ticket.ticketNumber)}.txt`,
+  });
 
   const transcriptCh = guild.channels.cache.get(TRANSCRIPT_CHANNEL_ID) as TextChannel | undefined;
+  const logCh = guild.channels.cache.get(TICKET_LOG_CHANNEL_ID) as TextChannel | undefined;
+
+  const openedTs = Math.floor(new Date(ticket.createdAt).getTime() / 1000);
+
+  const closeEmbed = new EmbedBuilder()
+    .setColor(SUCCESS_COLOR)
+    .setTitle("Ticket Closed")
+    .addFields(
+      { name: "# Ticket ID",    value: `${ticket.ticketNumber}`,                              inline: true },
+      { name: "✅ Opened By",   value: `<@${ticket.userId}>`,                                 inline: true },
+      { name: "🔴 Closed By",  value: `<@${closedById}>`,                                    inline: true },
+      { name: "⏰ Open Time",   value: `<t:${openedTs}:F>`,                                   inline: true },
+      { name: "👤 Claimed By",  value: ticket.claimedById ? `<@${ticket.claimedById}>` : "Not claimed", inline: true },
+      { name: "❓ Reason",      value: reason },
+    )
+    .setFooter(FOOTER)
+    .setTimestamp();
+
+  let transcriptMsgUrl = "";
   if (transcriptCh) {
-    await transcriptCh.send({
-      embeds: [
-        new EmbedBuilder()
-          .setColor(BOT_COLOR)
-          .setTitle(`Transcript — ${ticketTag(ticket.ticketNumber)}`)
-          .addFields(
-            { name: "Category", value: cat?.label ?? ticket.categoryId, inline: true },
-            { name: "Opened by", value: `<@${ticket.userId}>`, inline: true },
-            { name: "Closed by", value: closedBy, inline: true },
-            { name: "Reason", value: reason },
-          )
-          .setFooter(FOOTER)
-          .setTimestamp(),
-      ],
-      files: [file],
-    }).catch(() => {});
+    const transcriptMsg = await transcriptCh
+      .send({ embeds: [closeEmbed], files: [file] })
+      .catch(() => null);
+    if (transcriptMsg) {
+      transcriptMsgUrl = `https://discord.com/channels/${guild.id}/${transcriptCh.id}/${transcriptMsg.id}`;
+      const editRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+        new ButtonBuilder()
+          .setCustomId(`edit_reason_${guild.id}_${transcriptCh.id}_${transcriptMsg.id}`)
+          .setLabel("Edit Reason")
+          .setStyle(ButtonStyle.Secondary),
+      );
+      await transcriptMsg.edit({ components: [editRow] }).catch(() => {});
+    }
+  }
+
+  const logEmbed = new EmbedBuilder()
+    .setColor(SUCCESS_COLOR)
+    .setTitle("Ticket Closed")
+    .addFields(
+      { name: "# Ticket ID",   value: `${ticket.ticketNumber}`,                              inline: true },
+      { name: "✅ Opened By",  value: `<@${ticket.userId}>`,                                 inline: true },
+      { name: "🔴 Closed By", value: `<@${closedById}>`,                                    inline: true },
+      { name: "⏰ Open Time",  value: `<t:${openedTs}:F>`,                                   inline: true },
+      { name: "👤 Claimed By", value: ticket.claimedById ? `<@${ticket.claimedById}>` : "Not claimed", inline: true },
+      { name: "❓ Reason",     value: reason },
+    )
+    .setFooter(FOOTER)
+    .setTimestamp();
+
+  if (logCh) {
+    const logButtons: ButtonBuilder[] = [];
+    if (transcriptMsgUrl) {
+      logButtons.push(
+        new ButtonBuilder().setLabel("View Transcript").setStyle(ButtonStyle.Link).setURL(transcriptMsgUrl),
+      );
+    }
+    const logRow = new ActionRowBuilder<ButtonBuilder>().addComponents(...logButtons);
+    await logCh
+      .send({ embeds: [logEmbed], ...(logButtons.length > 0 ? { components: [logRow] } : {}) })
+      .catch(() => {});
   }
 }
 
@@ -283,10 +329,9 @@ async function handleCommand(i: ChatInputCommandInteraction) {
     if (!isStaff(member) && ticket.userId !== user.id) {
       await i.reply({ embeds: [errEmbed("No permission to close this ticket.")], flags: 64 }); return;
     }
-    const reason = i.options.getString("reason") ?? "No reason provided";
+    const reason = i.options.getString("reason") ?? "No reason specified";
     await i.reply({ embeds: [infoEmbed("Closing ticket in 5 seconds. A transcript will be saved.")] });
-    await sendTranscript(guild, ticket, channel as TextChannel, user.username, reason);
-    await logToChannel(guild, TICKET_LOG_CHANNEL_ID, closedLogEmbed(ticket, user.username, reason));
+    await closeTicket(guild, ticket, channel as TextChannel, user.username, user.id, reason);
     setTimeout(async () => {
       storage.removeTicket(channel.id);
       await (channel as TextChannel).delete("Ticket closed").catch(() => {});
@@ -338,12 +383,44 @@ async function handleButton(i: ButtonInteraction) {
       await i.reply({ embeds: [errEmbed("No permission.")], flags: 64 }); return;
     }
     await i.reply({ embeds: [infoEmbed("Closing ticket in 5 seconds. A transcript will be saved.")] });
-    await sendTranscript(guild, ticket, i.channel as TextChannel, user.username, "Closed via button");
-    await logToChannel(guild, TICKET_LOG_CHANNEL_ID, closedLogEmbed(ticket, user.username, "Closed via button"));
+    await closeTicket(guild, ticket, i.channel as TextChannel, user.username, user.id, "No reason specified");
     setTimeout(async () => {
       storage.removeTicket(i.channel!.id);
       await (i.channel as TextChannel).delete("Ticket closed").catch(() => {});
     }, 5000);
+    return;
+  }
+
+  if (customId === "ticket_claim") {
+    if (!guild || !i.channel) return;
+    const ticket = storage.getTicket(i.channel.id);
+    if (!ticket) { await i.reply({ embeds: [errEmbed("Not a ticket channel.")], flags: 64 }); return; }
+    const member = i.member as GuildMember;
+    if (!isStaff(member)) { await i.reply({ embeds: [errEmbed("Staff only.")], flags: 64 }); return; }
+    if (ticket.claimedById) {
+      await i.reply({ embeds: [errEmbed(`This ticket is already claimed by <@${ticket.claimedById}>.`)], flags: 64 }); return;
+    }
+    storage.claimTicket(i.channel.id, user.username, user.id);
+    await i.reply({ embeds: [okEmbed(`Ticket claimed by <@${user.id}>.`)] });
+    return;
+  }
+
+  if (customId.startsWith("edit_reason_")) {
+    const [, , guildId, channelId, messageId] = customId.split("_");
+    const modal = new ModalBuilder()
+      .setCustomId(`mod_edit_reason_${guildId}_${channelId}_${messageId}`)
+      .setTitle("Edit Close Reason");
+    modal.addComponents(
+      new ActionRowBuilder<TextInputBuilder>().addComponents(
+        new TextInputBuilder()
+          .setCustomId("new_reason")
+          .setLabel("New Reason")
+          .setStyle(TextInputStyle.Paragraph)
+          .setRequired(true)
+          .setMaxLength(500),
+      ),
+    );
+    await i.showModal(modal);
     return;
   }
 
@@ -578,6 +655,33 @@ async function handleModal(i: ModalSubmitInteraction) {
     storage.updateFarmList(i.fields.getTextInputValue("farm_list"));
     await i.reply({ embeds: [okEmbed("Farm list updated.")], flags: 64 }); return;
   }
+  if (customId.startsWith("mod_edit_reason_")) {
+    const parts = customId.split("_");
+    const [, , , guildId, channelId, messageId] = parts;
+    const newReason = i.fields.getTextInputValue("new_reason");
+    if (!guildId || !channelId || !messageId) {
+      await i.reply({ embeds: [errEmbed("Invalid data.")], flags: 64 }); return;
+    }
+    const guild = i.guild ?? client.guilds.cache.get(guildId);
+    if (!guild) { await i.reply({ embeds: [errEmbed("Guild not found.")], flags: 64 }); return; }
+    const ch = guild.channels.cache.get(channelId) as TextChannel | undefined;
+    if (!ch) { await i.reply({ embeds: [errEmbed("Channel not found.")], flags: 64 }); return; }
+    const msg = await ch.messages.fetch(messageId).catch(() => null);
+    if (!msg) { await i.reply({ embeds: [errEmbed("Message not found.")], flags: 64 }); return; }
+    const oldEmbed = msg.embeds[0];
+    if (!oldEmbed) { await i.reply({ embeds: [errEmbed("No embed to edit.")], flags: 64 }); return; }
+    const updatedEmbed = EmbedBuilder.from(oldEmbed);
+    const fields = updatedEmbed.data.fields ?? [];
+    const reasonIdx = fields.findIndex((f) => f.name === "❓ Reason");
+    if (reasonIdx >= 0) {
+      fields[reasonIdx]!.value = newReason;
+      updatedEmbed.setFields(fields);
+    }
+    await msg.edit({ embeds: [updatedEmbed] }).catch(() => {});
+    await i.reply({ embeds: [okEmbed(`Reason updated to: **${newReason}**`)], flags: 64 });
+    return;
+  }
+
   if (customId === "mod_panel_text") {
     storage.updatePanelText(i.fields.getTextInputValue("panel_title"), i.fields.getTextInputValue("panel_desc"));
     await i.reply({ embeds: [okEmbed("Panel text updated. Resend the panel to apply.")], flags: 64 }); return;
@@ -674,6 +778,7 @@ async function handleTicketCreate(
 
   const controlRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
     new ButtonBuilder().setCustomId("ticket_close").setLabel("Close Ticket").setStyle(ButtonStyle.Danger),
+    new ButtonBuilder().setCustomId("ticket_claim").setLabel("Claim Ticket").setStyle(ButtonStyle.Secondary),
   );
 
   const ping = isFarm ? `<@${user.id}> <@&${BUILD_TICKET_ROLE_ID}>` : `<@${user.id}>`;

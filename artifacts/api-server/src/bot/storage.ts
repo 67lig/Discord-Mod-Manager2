@@ -9,8 +9,8 @@ export interface TicketEntry {
   channelId: string;
   createdAt: string;
   ticketNumber: number;
-  closedBy?: string;
-  closedAt?: string;
+  claimedBy?: string;
+  claimedById?: string;
 }
 
 interface BotData {
@@ -71,6 +71,14 @@ export const storage = {
   removeTicket(channelId: string) {
     delete _data.tickets[channelId];
     saveData(_data);
+  },
+
+  claimTicket(channelId: string, username: string, userId: string) {
+    if (_data.tickets[channelId]) {
+      _data.tickets[channelId]!.claimedBy = username;
+      _data.tickets[channelId]!.claimedById = userId;
+      saveData(_data);
+    }
   },
 
   getTicket(channelId: string): TicketEntry | undefined {
