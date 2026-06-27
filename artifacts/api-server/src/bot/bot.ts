@@ -54,6 +54,26 @@ import { storage } from "./storage.js";
 const TOKEN = process.env["DISCORD_BOT_TOKEN"];
 if (!TOKEN) throw new Error("DISCORD_BOT_TOKEN is required");
 
+const DONUTSMP_API_KEY = process.env["DONUTSMP_API_KEY"];
+if (!DONUTSMP_API_KEY) throw new Error("DONUTSMP_API_KEY is required");
+
+const ONLINE_COLOR = 0x57f287;
+const OFFLINE_COLOR = 0xed4245;
+
+function fmtNum(n: number): string {
+  if (n >= 1_000_000_000) return `${(n / 1_000_000_000).toFixed(2)}B`;
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(2)}K`;
+  return String(n);
+}
+
+function fmtPlaytime(seconds: number): string {
+  const d = Math.floor(seconds / 86400);
+  const h = Math.floor((seconds % 86400) / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  return `${d}d ${h}h ${m}m`;
+}
+
 const FOOTER = { text: "Powered by tickets.bot" };
 
 function ticketTag(n: number) {
@@ -100,6 +120,12 @@ async function registerCommands(client: Client) {
   const rest = new REST().setToken(TOKEN!);
   const cmds = [
     new SlashCommandBuilder().setName("panel").setDescription("Owner control panel"),
+    new SlashCommandBuilder()
+      .setName("stats")
+      .setDescription("Look up a DonutSMP player's statistics")
+      .addStringOption((o) =>
+        o.setName("username").setDescription("Minecraft username").setRequired(true),
+      ),
     new SlashCommandBuilder()
       .setName("close")
       .setDescription("Close this ticket")
@@ -275,6 +301,69 @@ async function closeTicket(
 
 async function handleCommand(i: ChatInputCommandInteraction) {
   const { commandName, user, channel, guild } = i;
+
+  if (commandName === "stats") {
+    const username = i.options.getString("username", true).trim();
+    await i.deferReply();
+
+    let data: Record<string, unknown>;
+    try {
+      const res = await fetch(`https://api.donutsmp.net/v1/stats/${encodeURIComponent(username)}`, {
+        headers: { Authorization: `Bearer ${DONUTSMP_API_KEY}` },
+      });
+      if (!res.ok) {
+        const errText = await res.text().catch(() => String(res.status));
+        await i.editReply({ embeds: [errEmbed(`Player **${username}** not found or API error: ${errText}`)] });
+        return;
+      }
+      const json = (await res.json()) as { data?: Record<string, unknown> };
+      data = json.data ?? (json as Record<string, unknown>);
+    } catch (e) {
+      await i.editReply({ embeds: [errEmbed("Failed to reach the DonutSMP API. Try again later.")] });
+      return;
+    }
+
+    const online = Boolean(data["online"] ?? data["isOnline"]);
+    const embedColor = online ? ONLINE_COLOR : OFFLINE_COLOR;
+    const statusLabel = online ? "currently online" : "currently offline";
+
+    const balance      = typeof data["balance"]      === "number" ? fmtNum(data["balance"])      : String(data["balance"]      ?? "N/A");
+    const shards       = typeof data["shards"]       === "number" ? fmtNum(data["shards"])       : String(data["shards"]       ?? "N/A");
+    const kills        = typeof data["kills"]        === "number" ? fmtNum(data["kills"])        : String(data["kills"]        ?? "N/A");
+    const deaths       = typeof data["deaths"]       === "number" ? fmtNum(data["deaths"])       : String(data["deaths"]       ?? "N/A");
+    const playtime     = typeof data["playtime"]     === "number" ? fmtPlaytime(data["playtime"]) : String(data["playtime"]    ?? "N/A");
+    const blocksPlaced = typeof data["blocksPlaced"] === "number" ? fmtNum(data["blocksPlaced"]) : String(data["blocksPlaced"] ?? "N/A");
+    const blocksBroken = typeof data["blocksBroken"] === "number" ? fmtNum(data["blocksBroken"]) : String(data["blocksBroken"] ?? "N/A");
+    const mobsKilled   = typeof data["mobsKilled"]   === "number" ? fmtNum(data["mobsKilled"])   : String(data["mobsKilled"]   ?? "N/A");
+    const moneyShop    = typeof data["moneySpentShop"] === "number" ? fmtNum(data["moneySpentShop"]) : String(data["moneySpentShop"] ?? "N/A");
+    const moneySell    = typeof data["moneyMadeSell"]  === "number" ? fmtNum(data["moneyMadeSell"])  : String(data["moneyMadeSell"]  ?? "N/A");
+    const lastSeen     = String(data["lastSeen"] ?? "N/A");
+    const discord      = String(data["discord"]  ?? "Not Linked");
+
+    const embed = new EmbedBuilder()
+      .setColor(embedColor)
+      .setTitle(`${username}'s Statistics`)
+      .setThumbnail(`https://minotar.net/avatar/${encodeURIComponent(username)}/80`)
+      .addFields(
+        { name: "Balance",            value: balance,      inline: false },
+        { name: "Shards",             value: shards,       inline: false },
+        { name: "Kills",              value: kills,        inline: false },
+        { name: "Deaths",             value: deaths,       inline: false },
+        { name: "Playtime",           value: playtime,     inline: false },
+        { name: "Blocks Placed",      value: blocksPlaced, inline: false },
+        { name: "Blocks Broken",      value: blocksBroken, inline: false },
+        { name: "Mobs Killed",        value: mobsKilled,   inline: false },
+        { name: "Money Spent (Shop)", value: moneyShop,    inline: false },
+        { name: "Money Made (Sell)",  value: moneySell,    inline: false },
+        { name: "Last Seen",          value: lastSeen,     inline: false },
+        { name: "Discord",            value: discord,      inline: false },
+      )
+      .setFooter({ text: `${username} is ${statusLabel}!` })
+      .setTimestamp();
+
+    await i.editReply({ embeds: [embed] });
+    return;
+  }
 
   if (commandName === "panel") {
     if (!isOwner(user.id)) {

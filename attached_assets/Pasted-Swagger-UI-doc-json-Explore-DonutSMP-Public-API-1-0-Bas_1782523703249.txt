@@ -1,0 +1,158 @@
+Swagger UI
+doc.json
+Explore
+DonutSMP Public API
+ 1.0 
+[ Base URL: api.donutsmp.net/ ]
+doc.json
+Official Public API for DonutSMP
+For authentication, create an API key in game using /api. Then copy this key and set the Authorization header as follows:
+Authorization: Bearer {YOUR_API_KEY}
+There is currently a limit of 250/reqs per minute per API key.
+
+Authorize
+Auction
+
+
+GET
+/v1/auction/list/{page}
+Sends all current Auction House entries
+
+
+GET
+/v1/auction/transactions/{page}
+Sends all current Auction House transaction data
+
+Leaderboards
+
+
+GET
+/v1/leaderboards/brokenblocks/{page}
+Sends a copy of the leaderboard for the amount of blocks broken
+
+
+GET
+/v1/leaderboards/deaths/{page}
+Sends a copy of the deaths leaderboard
+
+
+GET
+/v1/leaderboards/kills/{page}
+Sends a copy of the kills leaderboard
+
+
+GET
+/v1/leaderboards/mobskilled/{page}
+Sends a copy of the mobs killed leaderboard
+
+
+GET
+/v1/leaderboards/money/{page}
+Sends a copy of the money leaderboard
+
+
+GET
+/v1/leaderboards/placedblocks/{page}
+Sends a copy of the leaderboard for amount of placed blocks
+
+
+GET
+/v1/leaderboards/playtime/{page}
+Sends a copy of the shards playtime
+
+
+GET
+/v1/leaderboards/sell/{page}
+Sends a copy of the leaderboard for amount made on /sell
+
+
+GET
+/v1/leaderboards/shards/{page}
+Sends a copy of the shards leaderboard
+
+
+GET
+/v1/leaderboards/shop/{page}
+Sends a copy of the leaderboard for amount spent on /shop
+
+Lookup
+
+
+GET
+/v1/lookup/{user}
+Sends a copy of the player information as you would see with /findplayer
+
+Shield
+
+
+GET
+/v1/shield/bedrock/config/{service}
+Sends the configuration file for Shield to be inspected/updated.
+
+
+PUT
+/v1/shield/bedrock/config/{service}
+Updates the configuration file for Shield.
+
+
+GET
+/v1/shield/java/config/{service}
+Sends the configuration file for Shield to be inspected/updated.
+
+
+PUT
+/v1/shield/java/config/{service}
+Updates the configuration file for Shield.
+
+
+GET
+/v1/shield/metrics/{service}
+Sends a copy of service metrics for shield
+
+
+GET
+/v1/shield/stats/{service}
+Sends a copy of service stats for shield
+
+
+GET
+/v2/shield/bedrock/config/{service}
+Sends the configuration file for Shield to be inspected/updated.
+
+
+PUT
+/v2/shield/bedrock/config/{service}
+Updates the configuration file for Shield.
+
+Statistics
+
+
+GET
+/v1/stats/{user}
+Sends a copy of the player profile as you would see with /stats
+
+
+Models
+ah.RequestBody
+api.Ah
+api.AhResponse
+api.BedrockShieldConfig
+api.ContainerItem
+api.Enchantments
+api.InvalidResponse
+api.Item
+api.ItemData
+api.Leaderboard
+api.LeaderboardResponse
+api.Lookup
+api.LookupResponse
+api.MetricsResult
+api.OriginStats
+api.PurchaseItem
+api.Seller
+api.ShieldConfig
+api.Stats
+api.StatsResponse
+api.TransactionHistoryResponse
+api.Trim
+main.NoAuth
