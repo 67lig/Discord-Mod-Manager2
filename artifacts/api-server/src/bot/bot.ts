@@ -47,6 +47,7 @@ import {
   BUILD_TICKET_ROLE_ID,
   TICKET_LOG_CHANNEL_ID,
   TRANSCRIPT_CHANNEL_ID,
+  MOD_ROLE_IDS,
 } from "./config.js";
 import { storage } from "./storage.js";
 
@@ -119,7 +120,7 @@ async function registerCommands(client: Client) {
   ].map((c) => c.toJSON());
 
   try {
-    await rest.put(Routes.applicationCommands(client.user.id), { body: cmds });
+    await rest.put(Routes.applicationCommands(client.user.id), { body: [] });
     for (const guild of client.guilds.cache.values()) {
       await rest
         .put(Routes.applicationGuildCommands(client.user.id, guild.id), { body: cmds })
@@ -185,6 +186,9 @@ function isOwner(id: string) { return id === OWNER_ID; }
 function isStaff(m: GuildMember) {
   return isOwner(m.id) || m.permissions.has(PermissionFlagsBits.ManageChannels) || m.permissions.has(PermissionFlagsBits.Administrator);
 }
+function isMod(m: GuildMember) {
+  return isOwner(m.id) || MOD_ROLE_IDS.some((id) => m.roles.cache.has(id));
+}
 
 async function logToChannel(guild: Guild, channelId: string, embed: EmbedBuilder) {
   const ch = guild.channels.cache.get(channelId) as TextChannel | undefined;
@@ -201,23 +205,23 @@ async function closeTicket(
 ) {
   const cat = ALL_CATEGORIES.find((c) => c.id === ticket.categoryId);
 
-  const messages = await channel.messages.fetch({ limit: 100 }).catch(() => null);
-  let transcript = `Ticket Transcript — ${ticketTag(ticket.ticketNumber)}\n`;
-  transcript += `Category: ${cat?.label ?? ticket.categoryId}\n`;
-  transcript += `Opened by: ${ticket.username} (${ticket.userId})\n`;
-  transcript += `Closed by: ${closedByTag}\n`;
-  transcript += `Reason: ${reason}\n`;
-  transcript += `Date: ${new Date().toUTCString()}\n`;
-  transcript += `\n${"─".repeat(50)}\n\n`;
+  const messages = await channel.messages.fetch({ limit: 50 }).catch(() => null);
+  const lines: string[] = [
+    `=== Ticket ${ticketTag(ticket.ticketNumber)} | ${cat?.label ?? ticket.categoryId} ===`,
+    `Opened: ${ticket.username} | Closed: ${closedByTag} | Reason: ${reason}`,
+    `Date: ${new Date().toUTCString()}`,
+    `${"─".repeat(40)}`,
+  ];
   if (messages) {
     for (const msg of [...messages.values()].reverse()) {
       if (msg.author.bot) continue;
-      const ts = new Date(msg.createdTimestamp).toUTCString();
-      transcript += `[${ts}] ${msg.author.username}: ${msg.content}`;
-      if (msg.attachments.size > 0) transcript += ` [${msg.attachments.size} attachment(s)]`;
-      transcript += "\n";
+      const time = new Date(msg.createdTimestamp).toISOString().slice(11, 19);
+      let line = `[${time}] ${msg.author.username}: ${msg.content.slice(0, 300)}`;
+      if (msg.attachments.size > 0) line += ` [+${msg.attachments.size} file(s)]`;
+      lines.push(line);
     }
   }
+  const transcript = lines.join("\n");
 
   const file = new AttachmentBuilder(Buffer.from(transcript, "utf8"), {
     name: `transcript-${ticketTag(ticket.ticketNumber)}.txt`,
@@ -397,7 +401,7 @@ async function handleButton(i: ButtonInteraction) {
     const ticket = storage.getTicket(ticketChannelId);
     if (!ticket) { await i.reply({ embeds: [errEmbed("This ticket no longer exists.")], flags: 64 }); return; }
     const member = i.member as GuildMember;
-    if (!isStaff(member)) { await i.reply({ embeds: [errEmbed("Staff only.")], flags: 64 }); return; }
+    if (!isMod(member)) { await i.reply({ embeds: [errEmbed("You do not have the required moderator role.")], flags: 64 }); return; }
 
     const ticketCh = guild.channels.cache.get(ticketChannelId) as TextChannel | undefined;
     if (!ticketCh) { await i.reply({ embeds: [errEmbed("Ticket channel not found.")], flags: 64 }); return; }
@@ -836,7 +840,7 @@ async function handleTicketCreate(
   const logCh = guild.channels.cache.get(TICKET_LOG_CHANNEL_ID) as TextChannel | undefined;
   if (logCh) {
     const joinEmbed = new EmbedBuilder()
-      .setColor(0xed4245)
+      .setColor(isFarm ? SUCCESS_COLOR : 0xed4245)
       .setTitle("Join Ticket")
       .setDescription(`${channelName} with ID: ${ticketNum} has been opened. Press the button below to join it.`)
       .addFields(

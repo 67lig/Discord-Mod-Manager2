@@ -3,6 +3,13 @@ export const BUILD_TICKET_ROLE_ID = "1518626190813040752";
 export const TICKET_LOG_CHANNEL_ID = "1475866995470893087";
 export const TRANSCRIPT_CHANNEL_ID = "1450662194063867939";
 
+export const MOD_ROLE_IDS = [
+  "1450662192365047822",
+  "1450662192365047823",
+  "1450662192365047824",
+  "1450662192365047825",
+];
+
 export const BOT_COLOR = 0x5865f2;
 export const SUCCESS_COLOR = 0x57f287;
 export const ERROR_COLOR = 0xed4245;
@@ -54,7 +61,7 @@ export const FARM_CATEGORY: TicketCategory = {
   label: "Buy Farms",
   description:
     "Buy Farms – For users interested in purchasing a farm. Use this ticket for farm availability, pricing, purchase inquiries, or any questions related to buying a farm.",
-  color: 0x5865f2,
+  color: SUCCESS_COLOR,
   channelPrefix: "farm",
   discordCategoryName: "Farm Tickets",
   isFarm: true,
