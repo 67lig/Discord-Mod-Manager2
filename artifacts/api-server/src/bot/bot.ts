@@ -391,6 +391,45 @@ async function handleButton(i: ButtonInteraction) {
     return;
   }
 
+  if (customId.startsWith("join_ticket_")) {
+    const ticketChannelId = customId.slice("join_ticket_".length);
+    if (!guild) return;
+    const ticket = storage.getTicket(ticketChannelId);
+    if (!ticket) { await i.reply({ embeds: [errEmbed("This ticket no longer exists.")], flags: 64 }); return; }
+    const member = i.member as GuildMember;
+    if (!isStaff(member)) { await i.reply({ embeds: [errEmbed("Staff only.")], flags: 64 }); return; }
+
+    const ticketCh = guild.channels.cache.get(ticketChannelId) as TextChannel | undefined;
+    if (!ticketCh) { await i.reply({ embeds: [errEmbed("Ticket channel not found.")], flags: 64 }); return; }
+
+    const joined = storage.joinTicket(ticketChannelId, user.id);
+    if (!joined) {
+      await i.reply({ embeds: [errEmbed("You have already joined this ticket.")], flags: 64 }); return;
+    }
+
+    await ticketCh.permissionOverwrites.edit(user.id, {
+      ViewChannel: true, SendMessages: true, ReadMessageHistory: true, AttachFiles: true,
+    }).catch(() => {});
+
+    const updatedTicket = storage.getTicket(ticketChannelId);
+    const staffCount = updatedTicket?.joinedStaff?.length ?? 1;
+
+    const oldEmbed = i.message.embeds[0];
+    if (oldEmbed) {
+      const updatedEmbed = EmbedBuilder.from(oldEmbed);
+      const fields = (updatedEmbed.data.fields ?? []).map((f) =>
+        f.name === "👤 Staff In Ticket" ? { ...f, value: String(staffCount) } : f,
+      );
+      updatedEmbed.setFields(fields);
+      await i.update({ embeds: [updatedEmbed], components: i.message.components as never }).catch(() => {});
+    } else {
+      await i.deferUpdate().catch(() => {});
+    }
+
+    await ticketCh.send({ embeds: [okEmbed(`<@${user.id}> has joined the ticket.`)] }).catch(() => {});
+    return;
+  }
+
   if (customId === "ticket_claim") {
     if (!guild || !i.channel) return;
     const ticket = storage.getTicket(i.channel.id);
@@ -794,20 +833,29 @@ async function handleTicketCreate(
     ticketNumber: ticketNum,
   });
 
-  await logToChannel(
-    guild,
-    TICKET_LOG_CHANNEL_ID,
-    new EmbedBuilder()
-      .setColor(cat.color)
-      .setTitle(`New Ticket — ${ticketTag(ticketNum)}`)
+  const logCh = guild.channels.cache.get(TICKET_LOG_CHANNEL_ID) as TextChannel | undefined;
+  if (logCh) {
+    const joinEmbed = new EmbedBuilder()
+      .setColor(0xed4245)
+      .setTitle("Join Ticket")
+      .setDescription(`${channelName} with ID: ${ticketNum} has been opened. Press the button below to join it.`)
       .addFields(
-        { name: "Category", value: cat.label, inline: true },
-        { name: "Opened by", value: `<@${user.id}> (${user.tag})`, inline: true },
-        { name: "Channel", value: `<#${ticketChannel.id}>`, inline: true },
+        { name: "✅ Opened By",     value: `<@${user.id}>`, inline: true },
+        { name: "🔵 Panel",         value: cat.label,       inline: true },
+        { name: "👤 Staff In Ticket", value: "0",           inline: true },
       )
       .setFooter(FOOTER)
-      .setTimestamp(),
-  );
+      .setTimestamp();
+
+    const joinRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`join_ticket_${ticketChannel.id}`)
+        .setLabel("+ Join Ticket")
+        .setStyle(ButtonStyle.Primary),
+    );
+
+    await logCh.send({ embeds: [joinEmbed], components: [joinRow] }).catch(() => {});
+  }
 
   await i.editReply({
     embeds: [

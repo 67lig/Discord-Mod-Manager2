@@ -11,6 +11,7 @@ export interface TicketEntry {
   ticketNumber: number;
   claimedBy?: string;
   claimedById?: string;
+  joinedStaff?: string[];
 }
 
 interface BotData {
@@ -79,6 +80,16 @@ export const storage = {
       _data.tickets[channelId]!.claimedById = userId;
       saveData(_data);
     }
+  },
+
+  joinTicket(channelId: string, userId: string): boolean {
+    const ticket = _data.tickets[channelId];
+    if (!ticket) return false;
+    if (!ticket.joinedStaff) ticket.joinedStaff = [];
+    if (ticket.joinedStaff.includes(userId)) return false;
+    ticket.joinedStaff.push(userId);
+    saveData(_data);
+    return true;
   },
 
   getTicket(channelId: string): TicketEntry | undefined {
