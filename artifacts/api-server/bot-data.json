@@ -1,0 +1,9 @@
+{
+  "tickets": {},
+  "ticketCounter": 3,
+  "farmDescription": "Buy Farms – For users interested in purchasing a farm. Use this ticket for farm availability, pricing, purchase inquiries, or any questions related to buying a farm.",
+  "farmList": "available farms:\n\n(No farms currently listed. Check back soon!)",
+  "categoryMessages": {},
+  "ticketPanelTitle": "🎫 Support Tickets",
+  "ticketPanelDesc": "Need help or have a question? Click one of the buttons below to open a ticket. Our staff will assist you as soon as possible."
+}

@@ -20,7 +20,7 @@ import {
   AutoModerationActionType,
   AutoModerationRuleTriggerType,
   ChannelSelectMenuBuilder,
-  Colors,
+  AttachmentBuilder,
   type Interaction,
   type Guild,
   type GuildMember,
@@ -36,7 +36,9 @@ import {
 import { logger } from "../lib/logger.js";
 import {
   OWNER_ID,
-  TICKET_CATEGORIES,
+  REGULAR_CATEGORIES,
+  FARM_CATEGORY,
+  ALL_CATEGORIES,
   BOT_COLOR,
   SUCCESS_COLOR,
   ERROR_COLOR,
@@ -44,13 +46,14 @@ import {
   GOLD_COLOR,
   BUILD_TICKET_ROLE_ID,
   TICKET_LOG_CHANNEL_ID,
+  TRANSCRIPT_CHANNEL_ID,
 } from "./config.js";
 import { storage } from "./storage.js";
 
 const TOKEN = process.env["DISCORD_BOT_TOKEN"];
 if (!TOKEN) throw new Error("DISCORD_BOT_TOKEN is required");
 
-const EMBED_FOOTER = { text: "Ticket System" };
+const FOOTER = { text: "Powered by tickets.bot" };
 
 function ticketTag(n: number) {
   return `#${String(n).padStart(4, "0")}`;
@@ -70,94 +73,70 @@ export function createBotClient(): Client {
   });
 
   client.once("ready", async () => {
-    logger.info({ tag: client.user?.tag }, "Discord bot ready");
+    logger.info({ tag: client.user?.tag }, "Bot ready");
     await registerCommands(client);
     for (const guild of client.guilds.cache.values()) {
       await setupAutoMod(guild).catch((e) =>
-        logger.warn({ err: e, guild: guild.name }, "AutoMod setup failed"),
+        logger.warn({ err: e, guild: guild.name }, "AutoMod failed"),
       );
     }
   });
 
   client.on("guildCreate", async (guild) => {
-    await setupAutoMod(guild).catch((e) =>
-      logger.warn({ err: e, guild: guild.name }, "AutoMod setup on join failed"),
-    );
+    await setupAutoMod(guild).catch(() => {});
   });
 
-  client.on("interactionCreate", (interaction) => {
-    handleInteraction(interaction).catch((e) =>
-      logger.error({ err: e }, "Interaction handler error"),
-    );
+  client.on("interactionCreate", (i) => {
+    handleInteraction(i).catch((e) => logger.error({ err: e }, "Interaction error"));
   });
 
-  client.login(TOKEN).catch((e) => {
-    logger.error({ err: e }, "Failed to login to Discord");
-  });
-
+  client.login(TOKEN).catch((e) => logger.error({ err: e }, "Login failed"));
   return client;
 }
 
 async function registerCommands(client: Client) {
   if (!client.user) return;
   const rest = new REST().setToken(TOKEN!);
-  const commands = [
-    new SlashCommandBuilder()
-      .setName("panel")
-      .setDescription("Open the owner control panel")
-      .toJSON(),
+  const cmds = [
+    new SlashCommandBuilder().setName("panel").setDescription("Owner control panel"),
     new SlashCommandBuilder()
       .setName("close")
-      .setDescription("Close this ticket channel")
-      .addStringOption((o) =>
-        o.setName("reason").setDescription("Reason for closing").setRequired(false),
-      )
-      .toJSON(),
+      .setDescription("Close this ticket")
+      .addStringOption((o) => o.setName("reason").setDescription("Reason").setRequired(false)),
     new SlashCommandBuilder()
       .setName("rename")
       .setDescription("Rename this ticket channel")
-      .addStringOption((o) =>
-        o.setName("name").setDescription("New channel name").setRequired(true),
-      )
-      .toJSON(),
+      .addStringOption((o) => o.setName("name").setDescription("New name").setRequired(true)),
     new SlashCommandBuilder()
       .setName("add")
       .setDescription("Add a user to this ticket")
-      .addUserOption((o) => o.setName("user").setDescription("User to add").setRequired(true))
-      .toJSON(),
+      .addUserOption((o) => o.setName("user").setDescription("User").setRequired(true)),
     new SlashCommandBuilder()
       .setName("remove")
       .setDescription("Remove a user from this ticket")
-      .addUserOption((o) => o.setName("user").setDescription("User to remove").setRequired(true))
-      .toJSON(),
-    new SlashCommandBuilder()
-      .setName("tickets")
-      .setDescription("List all active tickets")
-      .toJSON(),
-  ];
+      .addUserOption((o) => o.setName("user").setDescription("User").setRequired(true)),
+    new SlashCommandBuilder().setName("tickets").setDescription("List active tickets (staff)"),
+  ].map((c) => c.toJSON());
 
   try {
-    await rest.put(Routes.applicationCommands(client.user.id), { body: commands });
+    await rest.put(Routes.applicationCommands(client.user.id), { body: cmds });
     for (const guild of client.guilds.cache.values()) {
       await rest
-        .put(Routes.applicationGuildCommands(client.user.id, guild.id), { body: commands })
+        .put(Routes.applicationGuildCommands(client.user.id, guild.id), { body: cmds })
         .catch(() => {});
     }
-    logger.info("Slash commands registered");
+    logger.info("Commands registered");
   } catch (e) {
-    logger.error({ err: e }, "Failed to register commands");
+    logger.error({ err: e }, "Command registration failed");
   }
 }
 
 async function setupAutoMod(guild: Guild) {
   const existing = await guild.autoModerationRules.fetch();
-  const hasKeyword = existing.some((r) => r.name === "Skelly Bot – Keyword Filter");
-  const hasMention = existing.some((r) => r.name === "Skelly Bot – Mention Spam");
-
-  if (!hasKeyword) {
+  if (!existing.some((r) => r.name === "Bot – Keyword Filter")) {
     await guild.autoModerationRules
       .create({
-        name: "Skelly Bot – Keyword Filter",
+        name: "Bot – Keyword Filter",
         eventType: 1,
         triggerType: AutoModerationRuleTriggerType.Keyword,
         triggerMetadata: {
@@ -170,144 +149,144 @@ async function setupAutoMod(guild: Guild) {
           ],
         },
         actions: [
-          {
-            type: AutoModerationActionType.BlockMessage,
-            metadata: { customMessage: "Your message was blocked by AutoMod." },
-          },
+          { type: AutoModerationActionType.BlockMessage, metadata: { customMessage: "Your message was blocked." } },
         ],
         enabled: true,
-        reason: "Skelly Bot AutoMod setup",
+        reason: "Bot AutoMod",
       })
       .catch(() => {});
   }
-
-  if (!hasMention) {
+  if (!existing.some((r) => r.name === "Bot – Mention Spam")) {
     await guild.autoModerationRules
       .create({
-        name: "Skelly Bot – Mention Spam",
+        name: "Bot – Mention Spam",
         eventType: 1,
         triggerType: AutoModerationRuleTriggerType.MentionSpam,
         triggerMetadata: { mentionTotalLimit: 6, mentionRaidProtectionEnabled: true },
         actions: [
-          {
-            type: AutoModerationActionType.BlockMessage,
-            metadata: { customMessage: "Too many mentions — message blocked." },
-          },
+          { type: AutoModerationActionType.BlockMessage, metadata: { customMessage: "Too many mentions." } },
         ],
         enabled: true,
-        reason: "Skelly Bot AutoMod setup",
+        reason: "Bot AutoMod",
       })
       .catch(() => {});
   }
 }
 
-async function handleInteraction(interaction: Interaction) {
-  if (interaction.isChatInputCommand()) return handleCommand(interaction);
-  if (interaction.isButton()) return handleButton(interaction);
-  if (interaction.isStringSelectMenu()) return handleStringSelect(interaction);
-  if (interaction.isChannelSelectMenu()) return handleChannelSelect(interaction);
-  if (interaction.isModalSubmit()) return handleModal(interaction);
+async function handleInteraction(i: Interaction) {
+  if (i.isChatInputCommand()) return handleCommand(i);
+  if (i.isButton()) return handleButton(i);
+  if (i.isStringSelectMenu()) return handleStringSelect(i);
+  if (i.isChannelSelectMenu()) return handleChannelSelect(i);
+  if (i.isModalSubmit()) return handleModal(i);
 }
 
-function isOwner(id: string) {
-  return id === OWNER_ID;
+function isOwner(id: string) { return id === OWNER_ID; }
+function isStaff(m: GuildMember) {
+  return isOwner(m.id) || m.permissions.has(PermissionFlagsBits.ManageChannels) || m.permissions.has(PermissionFlagsBits.Administrator);
 }
 
-function isStaffMember(member: GuildMember) {
-  return (
-    isOwner(member.id) ||
-    member.permissions.has(PermissionFlagsBits.ManageChannels) ||
-    member.permissions.has(PermissionFlagsBits.Administrator)
-  );
+async function logToChannel(guild: Guild, channelId: string, embed: EmbedBuilder) {
+  const ch = guild.channels.cache.get(channelId) as TextChannel | undefined;
+  if (ch) await ch.send({ embeds: [embed] }).catch(() => {});
 }
 
-async function sendLog(guild: Guild, embed: EmbedBuilder) {
-  const logChannel = guild.channels.cache.get(TICKET_LOG_CHANNEL_ID) as TextChannel | undefined;
-  if (logChannel) {
-    await logChannel.send({ embeds: [embed] }).catch(() => {});
+async function sendTranscript(guild: Guild, ticket: Awaited<ReturnType<typeof storage.getTicket>>, channel: TextChannel, closedBy: string, reason: string) {
+  if (!ticket) return;
+  const cat = ALL_CATEGORIES.find((c) => c.id === ticket.categoryId);
+
+  const messages = await channel.messages.fetch({ limit: 100 }).catch(() => null);
+  let transcript = `Ticket Transcript — ${ticketTag(ticket.ticketNumber)}\n`;
+  transcript += `Category: ${cat?.label ?? ticket.categoryId}\n`;
+  transcript += `Opened by: ${ticket.username} (${ticket.userId})\n`;
+  transcript += `Closed by: ${closedBy}\n`;
+  transcript += `Reason: ${reason}\n`;
+  transcript += `Date: ${new Date().toUTCString()}\n`;
+  transcript += `\n${"─".repeat(50)}\n\n`;
+
+  if (messages) {
+    const sorted = [...messages.values()].reverse();
+    for (const msg of sorted) {
+      if (msg.author.bot) continue;
+      const ts = new Date(msg.createdTimestamp).toUTCString();
+      transcript += `[${ts}] ${msg.author.username}: ${msg.content}`;
+      if (msg.attachments.size > 0) {
+        transcript += ` [${msg.attachments.size} attachment(s)]`;
+      }
+      transcript += "\n";
+    }
+  }
+
+  const buffer = Buffer.from(transcript, "utf8");
+  const file = new AttachmentBuilder(buffer, { name: `transcript-${ticketTag(ticket.ticketNumber)}.txt` });
+
+  const transcriptCh = guild.channels.cache.get(TRANSCRIPT_CHANNEL_ID) as TextChannel | undefined;
+  if (transcriptCh) {
+    await transcriptCh.send({
+      embeds: [
+        new EmbedBuilder()
+          .setColor(BOT_COLOR)
+          .setTitle(`Transcript — ${ticketTag(ticket.ticketNumber)}`)
+          .addFields(
+            { name: "Category", value: cat?.label ?? ticket.categoryId, inline: true },
+            { name: "Opened by", value: `<@${ticket.userId}>`, inline: true },
+            { name: "Closed by", value: closedBy, inline: true },
+            { name: "Reason", value: reason },
+          )
+          .setFooter(FOOTER)
+          .setTimestamp(),
+      ],
+      files: [file],
+    }).catch(() => {});
   }
 }
 
-async function handleCommand(interaction: ChatInputCommandInteraction) {
-  const { commandName, user, channel, guild } = interaction;
+async function handleCommand(i: ChatInputCommandInteraction) {
+  const { commandName, user, channel, guild } = i;
 
   if (commandName === "panel") {
     if (!isOwner(user.id)) {
-      await interaction.reply({ content: "❌ You are not authorized to use this command.", flags: 64 });
+      await i.reply({ embeds: [errEmbed("You are not authorized.")], flags: 64 });
       return;
     }
-    await interaction.reply({ embeds: [buildMainPanelEmbed()], components: [buildMainPanelRow()], flags: 64 });
+    await i.reply({ embeds: [panelEmbed()], components: [panelRow()], flags: 64 });
     return;
   }
 
   if (commandName === "tickets") {
     if (!guild) return;
-    const member = interaction.member as GuildMember;
-    if (!isStaffMember(member)) {
-      await interaction.reply({ content: "❌ Staff only.", flags: 64 });
-      return;
-    }
-    const tickets = storage.getTicketsByGuild(guild.id);
+    const member = i.member as GuildMember;
+    if (!isStaff(member)) { await i.reply({ embeds: [errEmbed("Staff only.")], flags: 64 }); return; }
+    const list = storage.getTicketsByGuild(guild.id);
     const embed = new EmbedBuilder()
       .setColor(BOT_COLOR)
-      .setTitle(`📋 Active Tickets — ${tickets.length} open`)
-      .setFooter(EMBED_FOOTER)
+      .setTitle(`Active Tickets — ${list.length} open`)
+      .setDescription(
+        list.length === 0
+          ? "No open tickets."
+          : list.slice(0, 25).map((t) => {
+              const cat = ALL_CATEGORIES.find((c) => c.id === t.categoryId);
+              return `**${ticketTag(t.ticketNumber)}** <#${t.channelId}> — ${cat?.label ?? t.categoryId} — <@${t.userId}>`;
+            }).join("\n"),
+      )
+      .setFooter(FOOTER)
       .setTimestamp();
-    if (tickets.length === 0) {
-      embed.setDescription("No open tickets right now.");
-    } else {
-      embed.setDescription(
-        tickets
-          .slice(0, 25)
-          .map((t) => {
-            const cat = TICKET_CATEGORIES.find((c) => c.id === t.categoryId);
-            return `${cat?.emoji ?? "🎫"} **${ticketTag(t.ticketNumber)}** <#${t.channelId}> · ${cat?.label} · <@${t.userId}>`;
-          })
-          .join("\n"),
-      );
-    }
-    await interaction.reply({ embeds: [embed], flags: 64 });
+    await i.reply({ embeds: [embed], flags: 64 });
     return;
   }
 
   if (commandName === "close") {
     if (!channel || !guild) return;
     const ticket = storage.getTicket(channel.id);
-    if (!ticket) {
-      await interaction.reply({ content: "❌ This is not a ticket channel.", flags: 64 });
-      return;
+    if (!ticket) { await i.reply({ embeds: [errEmbed("Not a ticket channel.")], flags: 64 }); return; }
+    const member = i.member as GuildMember;
+    if (!isStaff(member) && ticket.userId !== user.id) {
+      await i.reply({ embeds: [errEmbed("No permission to close this ticket.")], flags: 64 }); return;
     }
-    const member = interaction.member as GuildMember;
-    if (!isStaffMember(member) && ticket.userId !== user.id) {
-      await interaction.reply({ content: "❌ You do not have permission to close this ticket.", flags: 64 });
-      return;
-    }
-    const reason = interaction.options.getString("reason") ?? "No reason provided";
-    await interaction.reply({
-      embeds: [
-        new EmbedBuilder()
-          .setColor(WARNING_COLOR)
-          .setTitle("🔒 Closing Ticket")
-          .setDescription(`This ticket will be deleted in **5 seconds**.\n**Reason:** ${reason}`)
-          .setFooter(EMBED_FOOTER),
-      ],
-    });
-    const cat = TICKET_CATEGORIES.find((c) => c.id === ticket.categoryId);
-    await sendLog(
-      guild,
-      new EmbedBuilder()
-        .setColor(ERROR_COLOR)
-        .setTitle(`🔒 Ticket Closed — ${ticketTag(ticket.ticketNumber)}`)
-        .addFields(
-          { name: "Category", value: `${cat?.emoji ?? ""} ${cat?.label ?? ticket.categoryId}`, inline: true },
-          { name: "Opened by", value: `<@${ticket.userId}>`, inline: true },
-          { name: "Closed by", value: `<@${user.id}>`, inline: true },
-          { name: "Reason", value: reason, inline: false },
-          { name: "Opened", value: `<t:${Math.floor(new Date(ticket.createdAt).getTime() / 1000)}:R>`, inline: true },
-        )
-        .setFooter(EMBED_FOOTER)
-        .setTimestamp(),
-    );
+    const reason = i.options.getString("reason") ?? "No reason provided";
+    await i.reply({ embeds: [infoEmbed("Closing ticket in 5 seconds. A transcript will be saved.")] });
+    await sendTranscript(guild, ticket, channel as TextChannel, user.username, reason);
+    await logToChannel(guild, TICKET_LOG_CHANNEL_ID, closedLogEmbed(ticket, user.username, reason));
     setTimeout(async () => {
       storage.removeTicket(channel.id);
       await (channel as TextChannel).delete("Ticket closed").catch(() => {});
@@ -318,408 +297,323 @@ async function handleCommand(interaction: ChatInputCommandInteraction) {
   if (commandName === "rename") {
     if (!channel || !guild) return;
     const ticket = storage.getTicket(channel.id);
-    if (!ticket) {
-      await interaction.reply({ content: "❌ This is not a ticket channel.", flags: 64 });
-      return;
-    }
-    const member = interaction.member as GuildMember;
-    if (!isStaffMember(member)) {
-      await interaction.reply({ content: "❌ Only staff can rename tickets.", flags: 64 });
-      return;
-    }
-    const raw = interaction.options.getString("name", true);
-    const newName = raw.toLowerCase().replace(/[^a-z0-9-]/g, "-").slice(0, 90);
+    if (!ticket) { await i.reply({ embeds: [errEmbed("Not a ticket channel.")], flags: 64 }); return; }
+    if (!isStaff(i.member as GuildMember)) { await i.reply({ embeds: [errEmbed("Staff only.")], flags: 64 }); return; }
+    const newName = i.options.getString("name", true).toLowerCase().replace(/[^a-z0-9-]/g, "-").slice(0, 90);
     await (channel as TextChannel).setName(newName);
-    await interaction.reply({
-      embeds: [new EmbedBuilder().setColor(SUCCESS_COLOR).setDescription(`✅ Renamed to **${newName}**`).setFooter(EMBED_FOOTER)],
-    });
+    await i.reply({ embeds: [okEmbed(`Channel renamed to **${newName}**`)] });
     return;
   }
 
   if (commandName === "add") {
     if (!channel || !guild) return;
-    const ticket = storage.getTicket(channel.id);
-    if (!ticket) {
-      await interaction.reply({ content: "❌ This is not a ticket channel.", flags: 64 });
-      return;
-    }
-    const target = interaction.options.getUser("user", true);
+    if (!storage.getTicket(channel.id)) { await i.reply({ embeds: [errEmbed("Not a ticket channel.")], flags: 64 }); return; }
+    const target = i.options.getUser("user", true);
     await (channel as TextChannel).permissionOverwrites.edit(target.id, {
-      ViewChannel: true,
-      SendMessages: true,
-      ReadMessageHistory: true,
+      ViewChannel: true, SendMessages: true, ReadMessageHistory: true,
     });
-    await interaction.reply({
-      embeds: [new EmbedBuilder().setColor(SUCCESS_COLOR).setDescription(`✅ Added <@${target.id}> to this ticket.`).setFooter(EMBED_FOOTER)],
-    });
+    await i.reply({ embeds: [okEmbed(`Added <@${target.id}> to this ticket.`)] });
     return;
   }
 
   if (commandName === "remove") {
     if (!channel || !guild) return;
-    const ticket = storage.getTicket(channel.id);
-    if (!ticket) {
-      await interaction.reply({ content: "❌ This is not a ticket channel.", flags: 64 });
-      return;
-    }
-    const target = interaction.options.getUser("user", true);
+    if (!storage.getTicket(channel.id)) { await i.reply({ embeds: [errEmbed("Not a ticket channel.")], flags: 64 }); return; }
+    const target = i.options.getUser("user", true);
     await (channel as TextChannel).permissionOverwrites.delete(target.id);
-    await interaction.reply({
-      embeds: [new EmbedBuilder().setColor(SUCCESS_COLOR).setDescription(`✅ Removed <@${target.id}> from this ticket.`).setFooter(EMBED_FOOTER)],
-    });
+    await i.reply({ embeds: [okEmbed(`Removed <@${target.id}> from this ticket.`)] });
     return;
   }
 }
 
-async function handleButton(interaction: ButtonInteraction) {
-  const { customId, user, guild } = interaction;
-
-  if (customId.startsWith("tc_")) {
-    await handleTicketCreate(interaction, customId.slice(3));
-    return;
-  }
+async function handleButton(i: ButtonInteraction) {
+  const { customId, user, guild } = i;
 
   if (customId === "ticket_close") {
-    if (!guild || !interaction.channel) return;
-    const ticket = storage.getTicket(interaction.channel.id);
-    if (!ticket) {
-      await interaction.reply({ content: "❌ This is not a ticket channel.", flags: 64 });
-      return;
+    if (!guild || !i.channel) return;
+    const ticket = storage.getTicket(i.channel.id);
+    if (!ticket) { await i.reply({ embeds: [errEmbed("Not a ticket channel.")], flags: 64 }); return; }
+    const member = i.member as GuildMember;
+    if (!isStaff(member) && ticket.userId !== user.id) {
+      await i.reply({ embeds: [errEmbed("No permission.")], flags: 64 }); return;
     }
-    const member = interaction.member as GuildMember;
-    if (!isStaffMember(member) && ticket.userId !== user.id) {
-      await interaction.reply({ content: "❌ You do not have permission to close this ticket.", flags: 64 });
-      return;
-    }
-    await interaction.reply({
-      embeds: [
-        new EmbedBuilder()
-          .setColor(WARNING_COLOR)
-          .setTitle("🔒 Closing Ticket")
-          .setDescription("This ticket will be deleted in **5 seconds**.")
-          .setFooter(EMBED_FOOTER),
-      ],
-    });
-    const cat = TICKET_CATEGORIES.find((c) => c.id === ticket.categoryId);
-    await sendLog(
-      guild,
-      new EmbedBuilder()
-        .setColor(ERROR_COLOR)
-        .setTitle(`🔒 Ticket Closed — ${ticketTag(ticket.ticketNumber)}`)
-        .addFields(
-          { name: "Category", value: `${cat?.emoji ?? ""} ${cat?.label ?? ticket.categoryId}`, inline: true },
-          { name: "Opened by", value: `<@${ticket.userId}>`, inline: true },
-          { name: "Closed by", value: `<@${user.id}>`, inline: true },
-          { name: "Opened", value: `<t:${Math.floor(new Date(ticket.createdAt).getTime() / 1000)}:R>`, inline: true },
-        )
-        .setFooter(EMBED_FOOTER)
-        .setTimestamp(),
-    );
+    await i.reply({ embeds: [infoEmbed("Closing ticket in 5 seconds. A transcript will be saved.")] });
+    await sendTranscript(guild, ticket, i.channel as TextChannel, user.username, "Closed via button");
+    await logToChannel(guild, TICKET_LOG_CHANNEL_ID, closedLogEmbed(ticket, user.username, "Closed via button"));
     setTimeout(async () => {
-      storage.removeTicket(interaction.channel!.id);
-      await (interaction.channel as TextChannel).delete("Ticket closed").catch(() => {});
+      storage.removeTicket(i.channel!.id);
+      await (i.channel as TextChannel).delete("Ticket closed").catch(() => {});
     }, 5000);
     return;
   }
 
-  if (!isOwner(user.id) && customId.startsWith("panel_") || !isOwner(user.id) && customId.startsWith("t_") || !isOwner(user.id) && customId.startsWith("f_")) {
-    await interaction.reply({ content: "❌ Not authorized.", flags: 64 });
-    return;
+  if (!isOwner(user.id)) {
+    if (customId.startsWith("panel_") || customId.startsWith("t_") || customId.startsWith("f_")) {
+      await i.reply({ embeds: [errEmbed("Not authorized.")], flags: 64 }); return;
+    }
   }
 
-  if (customId === "panel_server") {
-    if (!guild) return;
-    const g = await guild.fetch();
-    await g.members.fetch().catch(() => {});
-    const online = g.members.cache.filter(
-      (m) => m.presence?.status !== "offline" && m.presence?.status !== undefined,
-    ).size;
-    const embed = new EmbedBuilder()
-      .setColor(BOT_COLOR)
-      .setTitle(`🖥️ Server Monitor — ${g.name}`)
-      .setThumbnail(g.iconURL())
-      .addFields(
-        { name: "👥 Members", value: `${g.memberCount}`, inline: true },
-        { name: "🟢 Online", value: `${online || "N/A"}`, inline: true },
-        { name: "💬 Channels", value: `${g.channels.cache.size}`, inline: true },
-        { name: "🎭 Roles", value: `${g.roles.cache.size}`, inline: true },
-        { name: "😀 Emojis", value: `${g.emojis.cache.size}`, inline: true },
-        { name: "🚀 Boosts", value: `${g.premiumSubscriptionCount ?? 0} (Level ${g.premiumTier})`, inline: true },
-        { name: "🎫 Open Tickets", value: `${storage.getTicketsByGuild(g.id).length}`, inline: true },
-        { name: "🏠 Owner", value: `<@${g.ownerId}>`, inline: true },
-        { name: "📅 Created", value: `<t:${Math.floor(g.createdTimestamp / 1000)}:R>`, inline: true },
-      )
-      .setFooter(EMBED_FOOTER)
-      .setTimestamp();
-    await interaction.update({ embeds: [embed], components: [backRow("panel_back")] });
-    return;
-  }
+  switch (customId) {
+    case "panel_back":
+      await i.update({ embeds: [panelEmbed()], components: [panelRow()] }); return;
 
-  if (customId === "panel_tickets") {
-    const embed = new EmbedBuilder()
-      .setColor(BOT_COLOR)
-      .setTitle("🎫 Ticket Panel")
-      .setDescription("Manage the ticket system. Send the panel to a channel, edit category messages, or view active tickets.")
-      .setFooter(EMBED_FOOTER);
-    const row1 = new ActionRowBuilder<ButtonBuilder>().addComponents(
-      new ButtonBuilder().setCustomId("t_send").setLabel("Send Ticket Panel").setEmoji("📤").setStyle(ButtonStyle.Primary),
-      new ButtonBuilder().setCustomId("t_edit").setLabel("Edit Messages").setEmoji("✏️").setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder().setCustomId("t_active").setLabel("Active Tickets").setEmoji("📋").setStyle(ButtonStyle.Secondary),
-    );
-    const row2 = new ActionRowBuilder<ButtonBuilder>().addComponents(
-      new ButtonBuilder().setCustomId("t_edit_panel_text").setLabel("Edit Panel Text").setEmoji("📝").setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder().setCustomId("panel_back").setLabel("Back").setEmoji("◀️").setStyle(ButtonStyle.Danger),
-    );
-    await interaction.update({ embeds: [embed], components: [row1, row2] });
-    return;
-  }
+    case "panel_server": {
+      if (!guild) return;
+      const g = await guild.fetch();
+      await g.members.fetch().catch(() => {});
+      const online = g.members.cache.filter((m) => m.presence?.status !== "offline" && !!m.presence?.status).size;
+      const embed = new EmbedBuilder()
+        .setColor(BOT_COLOR)
+        .setTitle(`Server Monitor — ${g.name}`)
+        .setThumbnail(g.iconURL())
+        .addFields(
+          { name: "Members", value: `${g.memberCount}`, inline: true },
+          { name: "Online", value: `${online || "N/A"}`, inline: true },
+          { name: "Channels", value: `${g.channels.cache.size}`, inline: true },
+          { name: "Roles", value: `${g.roles.cache.size}`, inline: true },
+          { name: "Boosts", value: `${g.premiumSubscriptionCount ?? 0} (Level ${g.premiumTier})`, inline: true },
+          { name: "Open Tickets", value: `${storage.getTicketsByGuild(g.id).length}`, inline: true },
+          { name: "Owner", value: `<@${g.ownerId}>`, inline: true },
+          { name: "Created", value: `<t:${Math.floor(g.createdTimestamp / 1000)}:R>`, inline: true },
+        )
+        .setFooter(FOOTER)
+        .setTimestamp();
+      await i.update({ embeds: [embed], components: [backRow("panel_back")] }); return;
+    }
 
-  if (customId === "panel_farms") {
-    const data = storage.getData();
-    const embed = new EmbedBuilder()
-      .setColor(GOLD_COLOR)
-      .setTitle("🌾 Farm Panel")
-      .setDescription("Manage farm listings and send farm information to a channel.")
-      .addFields(
-        { name: "Current Description", value: data.farmDescription.slice(0, 900) },
-        { name: "Current Farm List", value: data.farmList.slice(0, 900) },
-      )
-      .setFooter(EMBED_FOOTER);
-    const row1 = new ActionRowBuilder<ButtonBuilder>().addComponents(
-      new ButtonBuilder().setCustomId("f_send").setLabel("Send Farm Info").setEmoji("📤").setStyle(ButtonStyle.Primary),
-      new ButtonBuilder().setCustomId("f_edit_desc").setLabel("Edit Description").setEmoji("✏️").setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder().setCustomId("f_edit_list").setLabel("Edit Farm List").setEmoji("🌱").setStyle(ButtonStyle.Secondary),
-    );
-    const row2 = new ActionRowBuilder<ButtonBuilder>().addComponents(
-      new ButtonBuilder().setCustomId("panel_back").setLabel("Back").setEmoji("◀️").setStyle(ButtonStyle.Danger),
-    );
-    await interaction.update({ embeds: [embed], components: [row1, row2] });
-    return;
-  }
+    case "panel_tickets": {
+      const embed = new EmbedBuilder()
+        .setColor(BOT_COLOR)
+        .setTitle("Ticket Panel")
+        .setDescription("Manage the ticket system. Send the ticket panel, edit category messages, or view active tickets.")
+        .setFooter(FOOTER);
+      await i.update({
+        embeds: [embed],
+        components: [
+          new ActionRowBuilder<ButtonBuilder>().addComponents(
+            new ButtonBuilder().setCustomId("t_send").setLabel("Send Ticket Panel").setStyle(ButtonStyle.Primary),
+            new ButtonBuilder().setCustomId("t_edit").setLabel("Edit Messages").setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder().setCustomId("t_active").setLabel("Active Tickets").setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder().setCustomId("t_edit_text").setLabel("Edit Panel Text").setStyle(ButtonStyle.Secondary),
+          ),
+          backRow("panel_back"),
+        ],
+      }); return;
+    }
 
-  if (customId === "panel_back") {
-    await interaction.update({ embeds: [buildMainPanelEmbed()], components: [buildMainPanelRow()] });
-    return;
-  }
+    case "panel_farms": {
+      const data = storage.getData();
+      const embed = new EmbedBuilder()
+        .setColor(GOLD_COLOR)
+        .setTitle("Farm Panel")
+        .addFields(
+          { name: "Description", value: data.farmDescription.slice(0, 900) },
+          { name: "Farm List", value: data.farmList.slice(0, 900) },
+        )
+        .setFooter(FOOTER);
+      await i.update({
+        embeds: [embed],
+        components: [
+          new ActionRowBuilder<ButtonBuilder>().addComponents(
+            new ButtonBuilder().setCustomId("f_send_panel").setLabel("Send Farm Ticket Panel").setStyle(ButtonStyle.Primary),
+            new ButtonBuilder().setCustomId("f_send_info").setLabel("Send Farm Info").setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder().setCustomId("f_edit_desc").setLabel("Edit Description").setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder().setCustomId("f_edit_list").setLabel("Edit Farm List").setStyle(ButtonStyle.Secondary),
+          ),
+          backRow("panel_back"),
+        ],
+      }); return;
+    }
 
-  if (customId === "t_send") {
-    const sel = new ChannelSelectMenuBuilder()
-      .setCustomId("sel_ticket_ch")
-      .setPlaceholder("Select a channel to send the ticket panel")
-      .setChannelTypes(ChannelType.GuildText);
-    await interaction.update({
-      embeds: [new EmbedBuilder().setColor(BOT_COLOR).setTitle("📤 Send Ticket Panel").setDescription("Choose a channel below.").setFooter(EMBED_FOOTER)],
-      components: [
-        new ActionRowBuilder<ChannelSelectMenuBuilder>().addComponents(sel),
-        backRow("panel_tickets"),
-      ],
-    });
-    return;
-  }
+    case "t_send": {
+      const sel = new ChannelSelectMenuBuilder().setCustomId("sel_ticket_ch").setPlaceholder("Select a channel").setChannelTypes(ChannelType.GuildText);
+      await i.update({
+        embeds: [new EmbedBuilder().setColor(BOT_COLOR).setTitle("Send Ticket Panel").setDescription("Select the channel to send the ticket panel to.").setFooter(FOOTER)],
+        components: [new ActionRowBuilder<ChannelSelectMenuBuilder>().addComponents(sel), backRow("panel_tickets")],
+      }); return;
+    }
 
-  if (customId === "t_edit") {
-    const select = new StringSelectMenuBuilder()
-      .setCustomId("sel_edit_cat")
-      .setPlaceholder("Choose a category to edit")
-      .addOptions(
-        TICKET_CATEGORIES.map((cat) =>
-          new StringSelectMenuOptionBuilder()
-            .setLabel(cat.label)
-            .setValue(cat.id)
-            .setEmoji(cat.emoji)
-            .setDescription("Edit the message for this category"),
+    case "t_edit": {
+      const options = REGULAR_CATEGORIES.map((cat) =>
+        new StringSelectMenuOptionBuilder().setLabel(cat.label).setValue(cat.id).setDescription("Edit this category's message"),
+      );
+      const sel = new StringSelectMenuBuilder().setCustomId("sel_edit_cat").setPlaceholder("Choose a category").addOptions(options);
+      await i.update({
+        embeds: [new EmbedBuilder().setColor(BOT_COLOR).setTitle("Edit Category Messages").setDescription("Select a category to edit its welcome message.").setFooter(FOOTER)],
+        components: [new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(sel), backRow("panel_tickets")],
+      }); return;
+    }
+
+    case "t_edit_text": {
+      const data = storage.getData();
+      const modal = new ModalBuilder().setCustomId("mod_panel_text").setTitle("Edit Ticket Panel Text");
+      modal.addComponents(
+        new ActionRowBuilder<TextInputBuilder>().addComponents(
+          new TextInputBuilder().setCustomId("panel_title").setLabel("Title").setStyle(TextInputStyle.Short).setValue(data.ticketPanelTitle).setRequired(true),
+        ),
+        new ActionRowBuilder<TextInputBuilder>().addComponents(
+          new TextInputBuilder().setCustomId("panel_desc").setLabel("Description").setStyle(TextInputStyle.Paragraph).setValue(data.ticketPanelDesc).setRequired(true),
         ),
       );
-    await interaction.update({
-      embeds: [new EmbedBuilder().setColor(BOT_COLOR).setTitle("✏️ Edit Category Messages").setDescription("Select a category to edit its welcome message.").setFooter(EMBED_FOOTER)],
-      components: [
-        new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(select),
-        backRow("panel_tickets"),
-      ],
-    });
-    return;
-  }
-
-  if (customId === "t_edit_panel_text") {
-    const data = storage.getData();
-    const modal = new ModalBuilder().setCustomId("mod_panel_text").setTitle("Edit Ticket Panel Text");
-    modal.addComponents(
-      new ActionRowBuilder<TextInputBuilder>().addComponents(
-        new TextInputBuilder().setCustomId("panel_title").setLabel("Panel Title").setStyle(TextInputStyle.Short).setValue(data.ticketPanelTitle).setRequired(true),
-      ),
-      new ActionRowBuilder<TextInputBuilder>().addComponents(
-        new TextInputBuilder().setCustomId("panel_desc").setLabel("Panel Description").setStyle(TextInputStyle.Paragraph).setValue(data.ticketPanelDesc).setRequired(true),
-      ),
-    );
-    await interaction.showModal(modal);
-    return;
-  }
-
-  if (customId === "t_active") {
-    if (!guild) return;
-    const tickets = storage.getTicketsByGuild(guild.id);
-    const embed = new EmbedBuilder()
-      .setColor(BOT_COLOR)
-      .setTitle(`📋 Active Tickets — ${tickets.length} open`)
-      .setFooter(EMBED_FOOTER)
-      .setTimestamp();
-    if (tickets.length === 0) {
-      embed.setDescription("No open tickets right now.");
-    } else {
-      embed.setDescription(
-        tickets
-          .slice(0, 20)
-          .map((t) => {
-            const cat = TICKET_CATEGORIES.find((c) => c.id === t.categoryId);
-            return `${cat?.emoji ?? "🎫"} **${ticketTag(t.ticketNumber)}** <#${t.channelId}> · ${cat?.label} · <@${t.userId}> · <t:${Math.floor(new Date(t.createdAt).getTime() / 1000)}:R>`;
-          })
-          .join("\n"),
-      );
+      await i.showModal(modal); return;
     }
-    await interaction.update({ embeds: [embed], components: [backRow("panel_tickets")] });
-    return;
-  }
 
-  if (customId === "f_edit_desc") {
-    const modal = new ModalBuilder().setCustomId("mod_farm_desc").setTitle("Edit Farm Description");
-    modal.addComponents(
-      new ActionRowBuilder<TextInputBuilder>().addComponents(
-        new TextInputBuilder().setCustomId("farm_desc").setLabel("Farm Description").setStyle(TextInputStyle.Paragraph).setValue(storage.getData().farmDescription).setRequired(true),
-      ),
-    );
-    await interaction.showModal(modal);
-    return;
-  }
+    case "t_active": {
+      if (!guild) return;
+      const list = storage.getTicketsByGuild(guild.id);
+      const embed = new EmbedBuilder()
+        .setColor(BOT_COLOR)
+        .setTitle(`Active Tickets — ${list.length} open`)
+        .setDescription(
+          list.length === 0
+            ? "No open tickets."
+            : list.slice(0, 20).map((t) => {
+                const cat = ALL_CATEGORIES.find((c) => c.id === t.categoryId);
+                return `**${ticketTag(t.ticketNumber)}** <#${t.channelId}> — ${cat?.label} — <@${t.userId}> — <t:${Math.floor(new Date(t.createdAt).getTime() / 1000)}:R>`;
+              }).join("\n"),
+        )
+        .setFooter(FOOTER)
+        .setTimestamp();
+      await i.update({ embeds: [embed], components: [backRow("panel_tickets")] }); return;
+    }
 
-  if (customId === "f_edit_list") {
-    const modal = new ModalBuilder().setCustomId("mod_farm_list").setTitle("Edit Available Farms");
-    modal.addComponents(
-      new ActionRowBuilder<TextInputBuilder>().addComponents(
-        new TextInputBuilder().setCustomId("farm_list").setLabel("Available Farms").setStyle(TextInputStyle.Paragraph).setValue(storage.getData().farmList).setRequired(true),
-      ),
-    );
-    await interaction.showModal(modal);
-    return;
-  }
+    case "f_send_panel": {
+      const sel = new ChannelSelectMenuBuilder().setCustomId("sel_farm_panel_ch").setPlaceholder("Select a channel").setChannelTypes(ChannelType.GuildText);
+      await i.update({
+        embeds: [new EmbedBuilder().setColor(GOLD_COLOR).setTitle("Send Farm Ticket Panel").setDescription("Select the channel to send the farm ticket panel to.").setFooter(FOOTER)],
+        components: [new ActionRowBuilder<ChannelSelectMenuBuilder>().addComponents(sel), backRow("panel_farms")],
+      }); return;
+    }
 
-  if (customId === "f_send") {
-    const sel = new ChannelSelectMenuBuilder()
-      .setCustomId("sel_farm_ch")
-      .setPlaceholder("Select a channel to send farm info")
-      .setChannelTypes(ChannelType.GuildText);
-    await interaction.update({
-      embeds: [new EmbedBuilder().setColor(GOLD_COLOR).setTitle("📤 Send Farm Info").setDescription("Choose a channel below.").setFooter(EMBED_FOOTER)],
-      components: [
-        new ActionRowBuilder<ChannelSelectMenuBuilder>().addComponents(sel),
-        backRow("panel_farms"),
-      ],
-    });
-    return;
+    case "f_send_info": {
+      const sel = new ChannelSelectMenuBuilder().setCustomId("sel_farm_info_ch").setPlaceholder("Select a channel").setChannelTypes(ChannelType.GuildText);
+      await i.update({
+        embeds: [new EmbedBuilder().setColor(GOLD_COLOR).setTitle("Send Farm Info").setDescription("Select the channel to send farm information to.").setFooter(FOOTER)],
+        components: [new ActionRowBuilder<ChannelSelectMenuBuilder>().addComponents(sel), backRow("panel_farms")],
+      }); return;
+    }
+
+    case "f_edit_desc": {
+      const modal = new ModalBuilder().setCustomId("mod_farm_desc").setTitle("Edit Farm Description");
+      modal.addComponents(
+        new ActionRowBuilder<TextInputBuilder>().addComponents(
+          new TextInputBuilder().setCustomId("farm_desc").setLabel("Description").setStyle(TextInputStyle.Paragraph).setValue(storage.getData().farmDescription).setRequired(true),
+        ),
+      );
+      await i.showModal(modal); return;
+    }
+
+    case "f_edit_list": {
+      const modal = new ModalBuilder().setCustomId("mod_farm_list").setTitle("Edit Farm List");
+      modal.addComponents(
+        new ActionRowBuilder<TextInputBuilder>().addComponents(
+          new TextInputBuilder().setCustomId("farm_list").setLabel("Available Farms").setStyle(TextInputStyle.Paragraph).setValue(storage.getData().farmList).setRequired(true),
+        ),
+      );
+      await i.showModal(modal); return;
+    }
   }
 }
 
-async function handleStringSelect(interaction: StringSelectMenuInteraction) {
-  const { customId, values, user } = interaction;
-  if (customId === "sel_edit_cat") {
-    if (!isOwner(user.id)) return;
-    const categoryId = values[0]!;
-    const cat = TICKET_CATEGORIES.find((c) => c.id === categoryId);
+async function handleStringSelect(i: StringSelectMenuInteraction) {
+  const { customId, values, user, guild } = i;
+
+  if (customId === "sel_ticket_topic") {
+    await handleTicketCreate(i, values[0]!, false);
+    return;
+  }
+
+  if (customId === "sel_farm_topic") {
+    await handleTicketCreate(i, "buy-farms", true);
+    return;
+  }
+
+  if (customId === "sel_edit_cat" && isOwner(user.id)) {
+    const cat = ALL_CATEGORIES.find((c) => c.id === values[0]!);
     if (!cat) return;
-    const current = storage.getCategoryMessage(categoryId) ?? cat.description;
-    const modal = new ModalBuilder().setCustomId(`mod_cat_${categoryId}`).setTitle(`Edit: ${cat.label}`);
+    const current = storage.getCategoryMessage(cat.id) ?? cat.description;
+    const modal = new ModalBuilder().setCustomId(`mod_cat_${cat.id}`).setTitle(`Edit: ${cat.label}`);
     modal.addComponents(
       new ActionRowBuilder<TextInputBuilder>().addComponents(
-        new TextInputBuilder().setCustomId("cat_message").setLabel("Category Welcome Message").setStyle(TextInputStyle.Paragraph).setValue(current).setRequired(true),
+        new TextInputBuilder().setCustomId("cat_message").setLabel("Welcome Message").setStyle(TextInputStyle.Paragraph).setValue(current).setRequired(true),
       ),
     );
-    await interaction.showModal(modal);
+    await i.showModal(modal);
+    return;
   }
 }
 
-async function handleChannelSelect(interaction: ChannelSelectMenuInteraction) {
-  const { customId, values, guild } = interaction;
-  if (!guild) return;
+async function handleChannelSelect(i: ChannelSelectMenuInteraction) {
+  const { customId, values, guild } = i;
+  if (!guild || !isOwner(i.user.id)) return;
+  const ch = guild.channels.cache.get(values[0]!) as TextChannel | undefined;
+  if (!ch) return;
 
   if (customId === "sel_ticket_ch") {
-    if (!isOwner(interaction.user.id)) return;
-    const ch = guild.channels.cache.get(values[0]!) as TextChannel | undefined;
-    if (!ch) return;
-    await ch.send({ embeds: [buildTicketPanelEmbed()], components: buildTicketPanelRows() });
-    await interaction.update({
-      embeds: [new EmbedBuilder().setColor(SUCCESS_COLOR).setDescription(`✅ Ticket panel sent to <#${ch.id}>!`).setFooter(EMBED_FOOTER)],
-      components: [backRow("panel_tickets")],
-    });
+    await ch.send({ embeds: [ticketPanelEmbed()], components: ticketPanelComponents() });
+    await i.update({ embeds: [okEmbed(`Ticket panel sent to <#${ch.id}>`)], components: [backRow("panel_tickets")] });
     return;
   }
 
-  if (customId === "sel_farm_ch") {
-    if (!isOwner(interaction.user.id)) return;
-    const ch = guild.channels.cache.get(values[0]!) as TextChannel | undefined;
-    if (!ch) return;
-    await ch.send({ embeds: [buildFarmEmbed()] });
-    await interaction.update({
-      embeds: [new EmbedBuilder().setColor(SUCCESS_COLOR).setDescription(`✅ Farm info sent to <#${ch.id}>!`).setFooter(EMBED_FOOTER)],
-      components: [backRow("panel_farms")],
-    });
+  if (customId === "sel_farm_panel_ch") {
+    await ch.send({ embeds: [farmTicketPanelEmbed()], components: farmTicketComponents() });
+    await i.update({ embeds: [okEmbed(`Farm ticket panel sent to <#${ch.id}>`)], components: [backRow("panel_farms")] });
+    return;
+  }
+
+  if (customId === "sel_farm_info_ch") {
+    await ch.send({ embeds: [farmInfoEmbed()] });
+    await i.update({ embeds: [okEmbed(`Farm info sent to <#${ch.id}>`)], components: [backRow("panel_farms")] });
     return;
   }
 }
 
-async function handleModal(interaction: ModalSubmitInteraction) {
-  const { customId } = interaction;
-
+async function handleModal(i: ModalSubmitInteraction) {
+  const { customId } = i;
   if (customId === "mod_farm_desc") {
-    storage.updateFarmDescription(interaction.fields.getTextInputValue("farm_desc"));
-    await interaction.reply({ embeds: [new EmbedBuilder().setColor(SUCCESS_COLOR).setDescription("✅ Farm description updated!").setFooter(EMBED_FOOTER)], flags: 64 });
-    return;
+    storage.updateFarmDescription(i.fields.getTextInputValue("farm_desc"));
+    await i.reply({ embeds: [okEmbed("Farm description updated.")], flags: 64 }); return;
   }
   if (customId === "mod_farm_list") {
-    storage.updateFarmList(interaction.fields.getTextInputValue("farm_list"));
-    await interaction.reply({ embeds: [new EmbedBuilder().setColor(SUCCESS_COLOR).setDescription("✅ Farm list updated!").setFooter(EMBED_FOOTER)], flags: 64 });
-    return;
+    storage.updateFarmList(i.fields.getTextInputValue("farm_list"));
+    await i.reply({ embeds: [okEmbed("Farm list updated.")], flags: 64 }); return;
   }
   if (customId === "mod_panel_text") {
-    storage.updatePanelText(
-      interaction.fields.getTextInputValue("panel_title"),
-      interaction.fields.getTextInputValue("panel_desc"),
-    );
-    await interaction.reply({ embeds: [new EmbedBuilder().setColor(SUCCESS_COLOR).setDescription("✅ Panel text updated! Resend the panel to apply.").setFooter(EMBED_FOOTER)], flags: 64 });
-    return;
+    storage.updatePanelText(i.fields.getTextInputValue("panel_title"), i.fields.getTextInputValue("panel_desc"));
+    await i.reply({ embeds: [okEmbed("Panel text updated. Resend the panel to apply.")], flags: 64 }); return;
   }
   if (customId.startsWith("mod_cat_")) {
-    const categoryId = customId.slice(8);
-    storage.setCategoryMessage(categoryId, interaction.fields.getTextInputValue("cat_message"));
-    await interaction.reply({ embeds: [new EmbedBuilder().setColor(SUCCESS_COLOR).setDescription("✅ Category message updated!").setFooter(EMBED_FOOTER)], flags: 64 });
-    return;
+    storage.setCategoryMessage(customId.slice(8), i.fields.getTextInputValue("cat_message"));
+    await i.reply({ embeds: [okEmbed("Category message updated.")], flags: 64 }); return;
   }
 }
 
-async function handleTicketCreate(interaction: ButtonInteraction, categoryId: string) {
-  const { user, guild } = interaction;
+async function handleTicketCreate(
+  i: StringSelectMenuInteraction,
+  categoryId: string,
+  isFarm: boolean,
+) {
+  const { user, guild } = i;
   if (!guild) return;
 
-  const cat = TICKET_CATEGORIES.find((c) => c.id === categoryId);
+  const cat = ALL_CATEGORIES.find((c) => c.id === categoryId);
   if (!cat) return;
 
-  await interaction.deferReply({ flags: 64 });
+  await i.deferReply({ flags: 64 });
 
   const existingId = storage.hasOpenTicket(user.id, categoryId, guild.id);
-  if (existingId) {
-    const existing = guild.channels.cache.get(existingId);
-    if (existing) {
-      await interaction.editReply({
-        embeds: [
-          new EmbedBuilder()
-            .setColor(WARNING_COLOR)
-            .setTitle("Ticket Already Open")
-            .setDescription(`You already have an open **${cat.label}** ticket: <#${existingId}>`)
-            .setFooter(EMBED_FOOTER),
-        ],
-      });
-      return;
-    }
-    storage.removeTicket(existingId);
+  if (existingId && guild.channels.cache.get(existingId)) {
+    await i.editReply({
+      embeds: [
+        new EmbedBuilder()
+          .setColor(WARNING_COLOR)
+          .setDescription(`You already have an open **${cat.label}** ticket: <#${existingId}>`)
+          .setFooter(FOOTER),
+      ],
+    });
+    return;
   }
+  if (existingId) storage.removeTicket(existingId);
 
   let discordCategory = guild.channels.cache.find(
     (c) => c.type === ChannelType.GuildCategory && c.name === cat.discordCategoryName,
@@ -729,9 +623,7 @@ async function handleTicketCreate(interaction: ButtonInteraction, categoryId: st
     discordCategory = await guild.channels.create({
       name: cat.discordCategoryName,
       type: ChannelType.GuildCategory,
-      permissionOverwrites: [
-        { id: guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
-      ],
+      permissionOverwrites: [{ id: guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] }],
     });
   }
 
@@ -739,38 +631,22 @@ async function handleTicketCreate(interaction: ButtonInteraction, categoryId: st
   const safeName = user.username.toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 18) || "user";
   const channelName = `${cat.channelPrefix}-${safeName}`;
 
-  const permOverwrites: Parameters<Guild["channels"]["create"]>[0]["permissionOverwrites"] = [
+  const overwrites: Parameters<Guild["channels"]["create"]>[0]["permissionOverwrites"] = [
     { id: guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
     {
       id: user.id,
-      allow: [
-        PermissionFlagsBits.ViewChannel,
-        PermissionFlagsBits.SendMessages,
-        PermissionFlagsBits.ReadMessageHistory,
-        PermissionFlagsBits.AttachFiles,
-        PermissionFlagsBits.EmbedLinks,
-      ],
+      allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.AttachFiles, PermissionFlagsBits.EmbedLinks],
     },
     {
       id: guild.members.me!.id,
-      allow: [
-        PermissionFlagsBits.ViewChannel,
-        PermissionFlagsBits.SendMessages,
-        PermissionFlagsBits.ManageChannels,
-        PermissionFlagsBits.ReadMessageHistory,
-      ],
+      allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ManageChannels, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.ManageMessages],
     },
   ];
 
-  if (categoryId === "buy-farms") {
-    permOverwrites.push({
+  if (isFarm) {
+    overwrites.push({
       id: BUILD_TICKET_ROLE_ID,
-      allow: [
-        PermissionFlagsBits.ViewChannel,
-        PermissionFlagsBits.SendMessages,
-        PermissionFlagsBits.ReadMessageHistory,
-        PermissionFlagsBits.AttachFiles,
-      ],
+      allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.AttachFiles],
     });
   }
 
@@ -778,39 +654,30 @@ async function handleTicketCreate(interaction: ButtonInteraction, categoryId: st
     name: channelName,
     type: ChannelType.GuildText,
     parent: discordCategory.id,
-    topic: `Ticket ${ticketTag(ticketNum)} | ${cat.label} | Opened by ${user.tag}`,
-    permissionOverwrites,
+    topic: `Ticket ${ticketTag(ticketNum)} | ${cat.label} | ${user.tag}`,
+    permissionOverwrites: overwrites,
   });
 
   const customMsg = storage.getCategoryMessage(categoryId) ?? cat.description;
 
   const welcomeEmbed = new EmbedBuilder()
     .setColor(cat.color)
-    .setTitle(`${cat.emoji} ${cat.label} — ${ticketTag(ticketNum)}`)
+    .setTitle(`${cat.label} — ${ticketTag(ticketNum)}`)
     .setDescription(customMsg)
     .addFields(
       { name: "Opened by", value: `<@${user.id}>`, inline: true },
-      { name: "Category", value: `${cat.emoji} ${cat.label}`, inline: true },
       { name: "Ticket", value: ticketTag(ticketNum), inline: true },
-      { name: "Created", value: `<t:${Math.floor(Date.now() / 1000)}:F>`, inline: false },
+      { name: "Opened", value: `<t:${Math.floor(Date.now() / 1000)}:F>`, inline: false },
     )
-    .setFooter({ text: `Ticket System • ${ticketTag(ticketNum)}` })
+    .setFooter(FOOTER)
     .setTimestamp();
 
   const controlRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
-    new ButtonBuilder()
-      .setCustomId("ticket_close")
-      .setLabel("Close Ticket")
-      .setEmoji("🔒")
-      .setStyle(ButtonStyle.Danger),
+    new ButtonBuilder().setCustomId("ticket_close").setLabel("Close Ticket").setStyle(ButtonStyle.Danger),
   );
 
-  const isFarm = categoryId === "buy-farms";
-  const pingContent = isFarm
-    ? `<@${user.id}> <@&${BUILD_TICKET_ROLE_ID}>`
-    : `<@${user.id}>`;
-
-  await ticketChannel.send({ content: pingContent, embeds: [welcomeEmbed], components: [controlRow] });
+  const ping = isFarm ? `<@${user.id}> <@&${BUILD_TICKET_ROLE_ID}>` : `<@${user.id}>`;
+  await ticketChannel.send({ content: ping, embeds: [welcomeEmbed], components: [controlRow] });
 
   storage.addTicket(ticketChannel.id, {
     userId: user.id,
@@ -822,102 +689,145 @@ async function handleTicketCreate(interaction: ButtonInteraction, categoryId: st
     ticketNumber: ticketNum,
   });
 
-  await sendLog(
+  await logToChannel(
     guild,
+    TICKET_LOG_CHANNEL_ID,
     new EmbedBuilder()
       .setColor(cat.color)
-      .setTitle(`${cat.emoji} New Ticket — ${ticketTag(ticketNum)}`)
+      .setTitle(`New Ticket — ${ticketTag(ticketNum)}`)
       .addFields(
-        { name: "Category", value: `${cat.emoji} ${cat.label}`, inline: true },
+        { name: "Category", value: cat.label, inline: true },
         { name: "Opened by", value: `<@${user.id}> (${user.tag})`, inline: true },
         { name: "Channel", value: `<#${ticketChannel.id}>`, inline: true },
       )
-      .setFooter(EMBED_FOOTER)
+      .setFooter(FOOTER)
       .setTimestamp(),
   );
 
-  await interaction.editReply({
+  await i.editReply({
     embeds: [
       new EmbedBuilder()
         .setColor(cat.color)
         .setTitle("Ticket Created")
-        .setDescription(`${cat.emoji} Your **${cat.label}** ticket has been created: <#${ticketChannel.id}>`)
+        .setDescription(`Your **${cat.label}** ticket has been created: <#${ticketChannel.id}>`)
         .addFields({ name: "Ticket Number", value: ticketTag(ticketNum), inline: true })
-        .setFooter(EMBED_FOOTER),
+        .setFooter(FOOTER),
     ],
   });
 }
 
-function backRow(target: string): ActionRowBuilder<ButtonBuilder> {
+function backRow(target: string) {
   return new ActionRowBuilder<ButtonBuilder>().addComponents(
-    new ButtonBuilder().setCustomId(target).setLabel("Back").setEmoji("◀️").setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId(target).setLabel("Back").setStyle(ButtonStyle.Secondary),
   );
 }
 
-function buildMainPanelEmbed(): EmbedBuilder {
+function panelEmbed() {
   return new EmbedBuilder()
     .setColor(BOT_COLOR)
-    .setTitle("⚙️ Owner Control Panel")
-    .setDescription("Select a section below to manage your server.")
+    .setTitle("Owner Control Panel")
+    .setDescription("Select a section below.")
     .addFields(
-      { name: "🖥️ Server Monitor", value: "Live server statistics", inline: true },
-      { name: "🎫 Ticket Panel", value: "Manage the ticket system", inline: true },
-      { name: "🌾 Farm Panel", value: "Manage farm listings", inline: true },
+      { name: "Server Monitor", value: "Live server statistics", inline: true },
+      { name: "Ticket Panel", value: "Manage the ticket system", inline: true },
+      { name: "Farm Panel", value: "Manage farm listings", inline: true },
     )
-    .setFooter(EMBED_FOOTER)
+    .setFooter(FOOTER)
     .setTimestamp();
 }
 
-function buildMainPanelRow(): ActionRowBuilder<ButtonBuilder> {
+function panelRow() {
   return new ActionRowBuilder<ButtonBuilder>().addComponents(
-    new ButtonBuilder().setCustomId("panel_server").setLabel("Server Monitor").setEmoji("🖥️").setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId("panel_tickets").setLabel("Ticket Panel").setEmoji("🎫").setStyle(ButtonStyle.Primary),
-    new ButtonBuilder().setCustomId("panel_farms").setLabel("Farm Panel").setEmoji("🌾").setStyle(ButtonStyle.Success),
+    new ButtonBuilder().setCustomId("panel_server").setLabel("Server Monitor").setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId("panel_tickets").setLabel("Ticket Panel").setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId("panel_farms").setLabel("Farm Panel").setStyle(ButtonStyle.Success),
   );
 }
 
-function buildTicketPanelEmbed(): EmbedBuilder {
+function ticketPanelEmbed() {
   const data = storage.getData();
   const embed = new EmbedBuilder()
     .setColor(BOT_COLOR)
     .setTitle(data.ticketPanelTitle)
-    .setDescription(data.ticketPanelDesc)
-    .setFooter(EMBED_FOOTER)
+    .setFooter(FOOTER)
     .setTimestamp();
 
-  for (const cat of TICKET_CATEGORIES) {
+  let desc = data.ticketPanelDesc ? data.ticketPanelDesc + "\n\n" : "";
+  for (const cat of REGULAR_CATEGORIES) {
     const msg = storage.getCategoryMessage(cat.id) ?? cat.description;
-    embed.addFields({ name: `${cat.emoji} ${cat.label}`, value: msg.slice(0, 200) });
+    desc += `**${cat.label}** – ${msg}\n\n`;
   }
-
+  embed.setDescription(desc.trim());
   return embed;
 }
 
-function buildTicketPanelRows(): ActionRowBuilder<ButtonBuilder>[] {
-  const rows: ActionRowBuilder<ButtonBuilder>[] = [];
-  for (let i = 0; i < TICKET_CATEGORIES.length; i += 3) {
-    const row = new ActionRowBuilder<ButtonBuilder>();
-    for (const cat of TICKET_CATEGORIES.slice(i, i + 3)) {
-      row.addComponents(
-        new ButtonBuilder()
-          .setCustomId(`tc_${cat.id}`)
-          .setLabel(cat.label)
-          .setEmoji(cat.emoji)
-          .setStyle(ButtonStyle.Primary),
-      );
-    }
-    rows.push(row);
-  }
-  return rows;
+function ticketPanelComponents() {
+  const options = REGULAR_CATEGORIES.map((cat) =>
+    new StringSelectMenuOptionBuilder().setLabel(cat.label).setValue(cat.id).setDescription(cat.description.slice(0, 100)),
+  );
+  const select = new StringSelectMenuBuilder()
+    .setCustomId("sel_ticket_topic")
+    .setPlaceholder("Select A Topic")
+    .addOptions(options);
+  return [new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(select)];
 }
 
-function buildFarmEmbed(): EmbedBuilder {
+function farmTicketPanelEmbed() {
+  const data = storage.getData();
+  const desc = storage.getCategoryMessage("buy-farms") ?? FARM_CATEGORY.description;
+  return new EmbedBuilder()
+    .setColor(GOLD_COLOR)
+    .setTitle("Buy Farms")
+    .setDescription(`**${FARM_CATEGORY.label}** – ${desc}\n\n${data.farmList}`)
+    .setFooter(FOOTER)
+    .setTimestamp();
+}
+
+function farmTicketComponents() {
+  const select = new StringSelectMenuBuilder()
+    .setCustomId("sel_farm_topic")
+    .setPlaceholder("Open a Farm Ticket")
+    .addOptions(
+      new StringSelectMenuOptionBuilder()
+        .setLabel("Buy Farms")
+        .setValue("buy-farms")
+        .setDescription("Open a farm purchase ticket"),
+    );
+  return [new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(select)];
+}
+
+function farmInfoEmbed() {
   const data = storage.getData();
   return new EmbedBuilder()
     .setColor(GOLD_COLOR)
-    .setTitle("🌾 Buy Farms")
+    .setTitle("Buy Farms")
     .setDescription(data.farmDescription)
-    .addFields({ name: "📋 Available Farms", value: data.farmList.slice(0, 1024) })
-    .setFooter(EMBED_FOOTER)
+    .addFields({ name: "Available Farms", value: data.farmList.slice(0, 1024) })
+    .setFooter(FOOTER)
     .setTimestamp();
+}
+
+function closedLogEmbed(ticket: NonNullable<ReturnType<typeof storage.getTicket>>, closedBy: string, reason: string) {
+  const cat = ALL_CATEGORIES.find((c) => c.id === ticket!.categoryId);
+  return new EmbedBuilder()
+    .setColor(ERROR_COLOR)
+    .setTitle(`Ticket Closed — ${ticketTag(ticket!.ticketNumber)}`)
+    .addFields(
+      { name: "Category", value: cat?.label ?? ticket!.categoryId, inline: true },
+      { name: "Opened by", value: `<@${ticket!.userId}>`, inline: true },
+      { name: "Closed by", value: closedBy, inline: true },
+      { name: "Reason", value: reason },
+    )
+    .setFooter(FOOTER)
+    .setTimestamp();
+}
+
+function okEmbed(msg: string) {
+  return new EmbedBuilder().setColor(SUCCESS_COLOR).setDescription(msg).setFooter(FOOTER);
+}
+function errEmbed(msg: string) {
+  return new EmbedBuilder().setColor(ERROR_COLOR).setDescription(msg).setFooter(FOOTER);
+}
+function infoEmbed(msg: string) {
+  return new EmbedBuilder().setColor(BOT_COLOR).setDescription(msg).setFooter(FOOTER);
 }
