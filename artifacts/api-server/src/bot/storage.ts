@@ -8,10 +8,14 @@ export interface TicketEntry {
   guildId: string;
   channelId: string;
   createdAt: string;
+  ticketNumber: number;
+  closedBy?: string;
+  closedAt?: string;
 }
 
 interface BotData {
   tickets: Record<string, TicketEntry>;
+  ticketCounter: number;
   farmDescription: string;
   farmList: string;
   categoryMessages: Record<string, string>;
@@ -24,6 +28,7 @@ const DATA_FILE = path.resolve(process.cwd(), "bot-data.json");
 function defaultData(): BotData {
   return {
     tickets: {},
+    ticketCounter: 0,
     farmDescription:
       "Buy Farms – For users interested in purchasing a farm. Use this ticket for farm availability, pricing, purchase inquiries, or any questions related to buying a farm.",
     farmList: "available farms:\n\n(No farms currently listed. Check back soon!)",
@@ -51,6 +56,12 @@ let _data = loadData();
 
 export const storage = {
   getData: () => _data,
+
+  nextTicketNumber(): number {
+    _data.ticketCounter = (_data.ticketCounter ?? 0) + 1;
+    saveData(_data);
+    return _data.ticketCounter;
+  },
 
   addTicket(channelId: string, ticket: TicketEntry) {
     _data.tickets[channelId] = ticket;

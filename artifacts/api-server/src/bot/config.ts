@@ -1,5 +1,8 @@
 export const OWNER_ID = "1491457883219693720";
 
+export const BUILD_TICKET_ROLE_ID = "1518626190813040752";
+export const TICKET_LOG_CHANNEL_ID = "1475866995470893087";
+
 export const BOT_COLOR = 0x5865f2;
 export const SUCCESS_COLOR = 0x57f287;
 export const ERROR_COLOR = 0xed4245;
